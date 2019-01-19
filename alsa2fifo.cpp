@@ -35,9 +35,10 @@
 
 #include "types.h"
 #include "AlsaAudioInput.h"
-#include "blockingcircularbuffer.h"
 #include "publishZeroConf/publishmDNS.h"
+#include "readerwriterqueue.h"
 
+using namespace moodycamel;
 namespace po = boost::program_options;
 
 static const std::string strOptDaemon = "daemon";
@@ -173,11 +174,12 @@ int main(int argc, char **argv)
         return -EINVAL;
     }
 
-    BlockingCircularBuffer<SampleFrame> streamBuffer(streamBufferSize);
+    BlockingReaderWriterQueue<SampleFrame> streamBuffer(streamBufferSize);
 
     const double analyzerWindowTime = 0.5; // seconds
     const size_t analyzerBufferSize = static_cast<size_t>(static_cast<double>(optRate) * analyzerWindowTime);
-    BlockingCircularBuffer<SampleFrame> analyzerBuffer(analyzerBufferSize+1);
+    //BlockingCircularBuffer<SampleFrame> analyzerBuffer(analyzerBufferSize+1);
+    BlockingReaderWriterQueue<SampleFrame> analyzerBuffer(analyzerBufferSize);
 
     std::cout << "Analyzer Size = " << analyzerBufferSize << std::endl;
 
@@ -190,14 +192,23 @@ int main(int argc, char **argv)
     // Reads from analyzerBuffer and processes
     new std::thread([&] {
 
- //       PublishZeroConf publishZeroConfg("domestic-recorder");
+        PublishZeroConf publishZeroConfg("domestic-recorder");
         SampleFrame buffer[analyzerBufferSize];
 
-   //     bool isSilence = false;
+        enum AnalyzerState {
+            STATE_SILENT,
+            STATE_SIGNAL
+        };
+
+        AnalyzerState currentState = STATE_SILENT;
+        double silenceThresholdPercent = 5; //Detect silence below 5% rms
+        int rmsCounter = 0;
+        int rmsCounterThreshold = 10;
 
         while (true) {
-            std::cout << "try to read: " << analyzerBufferSize << std::endl;
-            analyzerBuffer.get(buffer, static_cast<unsigned int>(analyzerBufferSize));
+
+            for (size_t i=0; i<analyzerBufferSize; ++i)
+                analyzerBuffer.wait_dequeue(buffer[i]);
 
             long chunkSum = 0;
             for (unsigned int i=0; i<analyzerBufferSize; ++i) {
@@ -208,11 +219,30 @@ int main(int argc, char **argv)
 
             double chunkSumMean = static_cast<double>(chunkSum) / static_cast<double>(analyzerBufferSize);
             double rms = sqrt(chunkSumMean);
-            double rmsPercent = rms / static_cast<double>(std::numeric_limits<Sample>::max());
+            double rmsPercent = 100.0 * rms / static_cast<double>(std::numeric_limits<Sample>::max());
 
             std::cout << "rms: " << rmsPercent << "%" << std::endl;
 
-//            publishZeroConfg.publish({mDNSService("_snapcast._tcp", settings.port), mDNSService("_snapcast-jsonrpc._tcp", settings.controlPort)});
+            if (rmsPercent < silenceThresholdPercent) {
+                if (rmsCounter > 0) {
+                    rmsCounter--;
+                    std::cout << "rmsCounter = " << rmsCounter << std::endl;
+                    if (rmsCounter == 0 && currentState == STATE_SIGNAL) {
+                        currentState = STATE_SILENT;
+                        std::cout << "stateChanged: STATE_SILENT" << std::endl;
+                    }
+                }
+            } else { // rmsPercent >= silenceThresholdPercent
+                if (rmsCounter <= rmsCounterThreshold) {
+                    rmsCounter++;
+                    std::cout << "rmsCounter = " << rmsCounter << std::endl;
+                    if (rmsCounter == rmsCounterThreshold && currentState == STATE_SILENT) {
+                        currentState = STATE_SIGNAL;
+                        std::cout << "stateChanged: STATE_SIGNAL" << std::endl;
+                        //publishZeroConfg.publish({mDNSService("_domestic-recorder._tcp", 4482)});
+                    }
+                }
+            }
         }
     });
 
@@ -231,7 +261,10 @@ int main(int argc, char **argv)
 
         while (true) {
 
-            streamBuffer.get(buffer, chunkSize);
+            //streamBuffer.get(buffer, chunkSize);
+            for (size_t i=0; i<chunkSize; ++i)
+                streamBuffer.wait_dequeue(buffer[i]);
+
             size_t byteSize = chunkSize * sizeof(SampleFrame);
             size_t bytesWritten = 0;
 
@@ -258,8 +291,10 @@ int main(int argc, char **argv)
 
 
     AlsaAudioInput *ai = new AlsaAudioInput(specs, [&streamBuffer, &analyzerBuffer](SampleFrame *frames, size_t numFrames) {
-        streamBuffer.set(frames, static_cast<unsigned int>(numFrames), BlockingCircularBuffer<SampleFrame>::Overwrite);
-        analyzerBuffer.set(frames, static_cast<unsigned int>(numFrames), BlockingCircularBuffer<SampleFrame>::Overwrite);
+        for (size_t i=0; i<numFrames; ++i) {
+            streamBuffer.enqueue(frames[i]);
+            analyzerBuffer.enqueue(frames[i]);
+        }
     });
 
     std::cout << "Starting capture..\n\n";
@@ -268,9 +303,7 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         //std::cout << "\033[F";
-        std::cout << "stream   w: " << streamBuffer.itemsWritten() << " | r: " << streamBuffer.itemsRead() << " | o: " << streamBuffer.itemsOverwritten() << " | a: " << streamBuffer.readyToRead() << std::endl;
-        std::cout << "anayzer  w: " << analyzerBuffer.itemsWritten() << " | r: " << analyzerBuffer.itemsRead() << " | o: " << analyzerBuffer.itemsOverwritten() << " | a: " << analyzerBuffer.readyToRead() << std::endl;
-
+        std::cout << ".";
     }
 
 

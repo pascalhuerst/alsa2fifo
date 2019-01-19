@@ -16,7 +16,7 @@ function(linkLib name target)
 endfunction(linkLib)
 
 set(LIBS alsa avahi-client avahi-core)
-set(SOURCES alsa2fifo.cpp AlsaAudioInput.cpp publishZeroConf/publishAvahi.cpp)
+set(SOURCES alsa2fifo.cpp AlsaAudioInput.cpp publishZeroConf/publishAvahi.cpp AudioStreamManager.cpp)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -Wno-unused-parameter -Wall -O2")
 
 add_executable(${PROJECT_NAME} ${SOURCES})
