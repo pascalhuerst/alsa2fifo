@@ -32,9 +32,3 @@ struct SampleFrame
     Sample right;
 };
 
-struct AlsaSpecs {
-    unsigned int rate;
-    unsigned int channels;
-    snd_pcm_format_t format;
-    std::string device;
-};

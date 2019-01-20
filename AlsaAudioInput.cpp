@@ -17,16 +17,59 @@
  */
 
 #include "AlsaAudioInput.h"
+#include "params.h"
 
 #include <utility>
 #include <chrono>
+#include <exception>
 
+#include <boost/program_options.hpp>
+namespace po = boost::program_options;
 
-AlsaAudioInput::AlsaAudioInput(const AlsaSpecs &specs, Callback cb) :
+AlsaAudioInput::AlsaAudioInput(const po::variables_map &vmAudio, Callback cb) :
     m_cb(cb),
     m_isRunning(false)
 {
-    open(specs.device, specs.rate, specs.format, 100.0);
+    std::string device = "";
+    if (vmAudio.count(strOptAudioDevice)) {
+        device = vmAudio[strOptAudioDevice].as<std::string>();
+    } else {
+        throw std::invalid_argument(strOptAudioDevice + "must be set!");
+    }
+
+    unsigned int channels = 0;
+    if (vmAudio.count(strOptAudioChannels)) {
+        channels = vmAudio[strOptAudioChannels].as<unsigned int>();
+    } else {
+        throw std::invalid_argument(strOptAudioChannels + "must be set!");
+    }
+
+    snd_pcm_format_t format;
+    if (vmAudio.count(strOptAudioFormat)) {
+        auto strFormat = vmAudio[strOptAudioFormat].as<std::string>();
+        if (strFormat != "S16_LE")
+            throw std::invalid_argument(strOptAudioFormat + ": Only supported format right now is S16_LE.");
+
+        format = SND_PCM_FORMAT_S16;
+    } else {
+        throw std::invalid_argument(strOptAudioFormat + "must be set!");
+    }
+
+    unsigned int rate = 0;
+    if (vmAudio.count(strOptAudioRate)) {
+        rate = vmAudio[strOptAudioRate].as<unsigned int>();
+    } else {
+        throw std::invalid_argument(strOptAudioRate + "must be set!");
+    }
+
+    double latency = 0.0;
+    if (vmAudio.count(strOptAudioLatency)) {
+        latency = vmAudio[strOptAudioLatency].as<double>();
+    } else {
+        throw std::invalid_argument(strOptAudioLatency + "must be set!");
+    }
+
+    open(device, rate, channels, format, latency);
     start();
 }
 
@@ -45,7 +88,7 @@ snd_pcm_uframes_t AlsaAudioInput::framesProcessed() const
     return m_framesProcessed;
 }
 
-void AlsaAudioInput::open(const std::string &deviceName, unsigned int rate, snd_pcm_format_t format, double latency)
+void AlsaAudioInput::open(const std::string &deviceName, unsigned int rate, unsigned int channels, snd_pcm_format_t format, double latency)
 {
     snd_pcm_open(&m_handle, deviceName.c_str(), SND_PCM_STREAM_CAPTURE, SND_PCM_ASYNC);
 
@@ -66,7 +109,7 @@ void AlsaAudioInput::open(const std::string &deviceName, unsigned int rate, snd_
     snd_pcm_hw_params_any(m_handle, hwparams);
     snd_pcm_hw_params_set_access(m_handle, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED);
     snd_pcm_hw_params_set_format(m_handle, hwparams, format);
-    snd_pcm_hw_params_set_channels(m_handle, hwparams, 2);
+    snd_pcm_hw_params_set_channels(m_handle, hwparams, channels);
     snd_pcm_hw_params_set_rate_near(m_handle, hwparams, &sampleRate, nullptr);
     snd_pcm_hw_params_set_periods(m_handle, hwparams, periods, 0);
     snd_pcm_hw_params_set_period_size_near(m_handle, hwparams, &m_framesPerPeriod, nullptr);
@@ -105,7 +148,7 @@ void AlsaAudioInput::close()
 
 void AlsaAudioInput::workerThread()
 {
-    std::cout << "Entering worker thread" << std::endl;
+    std::cout << "Starting Audio Worker Thread." << std::endl;
 
     prioritizeThread();
     setThreadAffinity();
@@ -114,8 +157,6 @@ void AlsaAudioInput::workerThread()
 
     SampleFrame samples[m_framesPerPeriod];
     std::fill(samples, samples + m_framesPerPeriod, SampleFrame{});
-
-    std::cout << "m_framesPerPeriod = " << m_framesPerPeriod << std::endl;
 
     snd_pcm_start(m_handle);
 

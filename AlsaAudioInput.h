@@ -23,6 +23,9 @@
 #include <thread>
 #include <atomic>
 
+#include <boost/program_options.hpp>
+namespace po = boost::program_options;
+
 #include "types.h"
 
 class AlsaAudioInput {
@@ -30,8 +33,7 @@ class AlsaAudioInput {
 public:
     using Callback = std::function<void(SampleFrame *frames, size_t numFrames)>;
 
-    AlsaAudioInput(const AlsaSpecs &specs,
-                   Callback cb);
+    AlsaAudioInput(const po::variables_map &vmAudio, Callback cb);
     ~AlsaAudioInput();
 
     std::chrono::nanoseconds latency() const;
@@ -40,7 +42,7 @@ public:
     void prioritizeThread();
 
 private:
-    void open(const std::string &deviceName, unsigned int rate, snd_pcm_format_t format,  double latency = 20.0 /* milliseconds */);
+    void open(const std::string &deviceName, unsigned int rate, unsigned int channels, snd_pcm_format_t format,  double latency = 20.0 /* milliseconds */);
     void start();
     void close();
     void workerThread();
