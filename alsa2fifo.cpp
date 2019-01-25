@@ -59,7 +59,7 @@ int main(int argc, char **argv)
         odGeneric.add_options()
                 (strOptGenericHelp.c_str(), "Print help message")
                 (strOptGenericDaemon.c_str(), "Daemonize after startup")
-                (strOptGenericPidFile.c_str(), po::value<std::string>(), "Path to pid file");
+                (strOptGenericKillDaemon.c_str(), "Kill a running daemon");
 
         // ########## Audio Options ##########
         po::options_description odAudio("Audio");
@@ -130,16 +130,15 @@ int main(int argc, char **argv)
 
         std::cerr << odCombined << "\n";
         std::cerr << e.what() << std::endl;
-        return -EIO;
+        return -EINVAL;
 
     } catch (std::runtime_error &e) {
 
         std::cerr << e.what() << std::endl;
+        return -EIO;
 
 
     } catch (std::exception &e) {
-
-        std::cerr << odCombined << "\n";
         std::cerr << e.what() << std::endl;
         return -EINVAL;
     }

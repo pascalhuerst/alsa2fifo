@@ -22,7 +22,7 @@
 // ########## General Options ##########
 const std::string strOptGenericHelp = "help";
 const std::string strOptGenericDaemon = "daemon";
-const std::string strOptGenericPidFile = "pidfile";
+const std::string strOptGenericKillDaemon = "kill";
 
 // ########## Audio Options ##########
 const std::string strOptAudioDevice = "device";
