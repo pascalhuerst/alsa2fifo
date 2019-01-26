@@ -40,6 +40,7 @@ namespace po = boost::program_options;
 #include "publishZeroConf/publishmDNS.h"
 #include "AudioStreamManager.h"
 #include "InputKey.h"
+#include "Led.h"
 
 void usage [[noreturn]] (const po::options_description &od)
 {
@@ -96,21 +97,30 @@ int main(int argc, char **argv)
             usage(odCombined);
         }
 
-        InputKey key(vmCombined, 3);
-        key.registerKey(30, [](){ // a
+        std::string key = "tpacpi::kbd_backlight";
+        auto led = Led::create(key);
+
+        for (auto &l : Led::available()) {
+            std::cout << "led:    |" << l << std::endl;
+        }
+
+        std::atomic<bool> terminateRequest = false;
+
+
+        InputKey keys(vmCombined, 3);
+        keys.registerKey(30, [](){ // a
             std::cout << "Press on key=30" << std::endl;
 
         }, [](std::chrono::milliseconds t){
             std::cout << "Release on key=30 t=" << t.count() << "ms" << std::endl;
         });
 
-        key.registerKey(31, [](){ // s
+        keys.registerKey(31, [](){ // s
             std::cout << "Press on key=31" << std::endl;
 
         }, [](std::chrono::milliseconds t){
             std::cout << "Release on key=31 t=" << t.count() << "ms" << std::endl;
         });
-
 
         AudioStreamManager streamManager(vmCombined, [&](AudioStreamManager::DetectorState s) {
 
@@ -123,6 +133,7 @@ int main(int argc, char **argv)
 
         int c =0;
         bool isRunning = false;
+        bool ledOn = false;
 
         std::cout << "To start the shit, press t: " << std::endl;
         while((c = getchar()) != 'q') {
@@ -136,12 +147,21 @@ int main(int argc, char **argv)
                     streamManager.stop();
                     isRunning = false;
                 }
+
             } else {
                 std::cout << "Nice key: " << static_cast<char>(c) << std::endl;
             }
 
+            // Toggle Led for fun
+            ledOn = !ledOn;
+            if (ledOn)
+                led->on();
+            else
+                led->off();
+
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
+        terminateRequest = true;
 
     } catch (std::invalid_argument &e) {
 

@@ -16,8 +16,8 @@ function(linkLib name target)
 endfunction(linkLib)
 
 set(LIBS alsa avahi-client avahi-core)
-set(SOURCES alsa2fifo.cpp AlsaAudioInput.cpp publishZeroConf/publishAvahi.cpp AudioStreamManager.cpp InputKey.cpp)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -std=c99 -Wno-unused-parameter -Wall -O2")
+set(SOURCES alsa2fifo.cpp AlsaAudioInput.cpp publishZeroConf/publishAvahi.cpp AudioStreamManager.cpp InputKey.cpp Led.cpp)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wno-unused-parameter -Wall -O2")
 
 add_executable(${PROJECT_NAME} ${SOURCES})
 
@@ -35,5 +35,6 @@ target_link_libraries(${PROJECT_NAME} ${CMAKE_THREAD_LIBS_INIT})
 find_package(Boost 1.40 COMPONENTS program_options REQUIRED)
 target_link_libraries(${PROJECT_NAME} ${Boost_LIBRARIES})
 
+target_link_libraries(${PROJECT_NAME} libstdc++fs.a)
 
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION /usr/sbin COMPONENT runtime)
