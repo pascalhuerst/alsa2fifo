@@ -39,6 +39,7 @@ namespace po = boost::program_options;
 
 #include "publishZeroConf/publishmDNS.h"
 #include "AudioStreamManager.h"
+#include "InputKey.h"
 
 void usage [[noreturn]] (const po::options_description &od)
 {
@@ -94,6 +95,22 @@ int main(int argc, char **argv)
         if (vmCombined.count(strOptGenericHelp)) {
             usage(odCombined);
         }
+
+        InputKey key(vmCombined, 3);
+        key.registerKey(30, [](){ // a
+            std::cout << "Press on key=30" << std::endl;
+
+        }, [](std::chrono::milliseconds t){
+            std::cout << "Release on key=30 t=" << t.count() << "ms" << std::endl;
+        });
+
+        key.registerKey(31, [](){ // s
+            std::cout << "Press on key=31" << std::endl;
+
+        }, [](std::chrono::milliseconds t){
+            std::cout << "Release on key=31 t=" << t.count() << "ms" << std::endl;
+        });
+
 
         AudioStreamManager streamManager(vmCombined, [&](AudioStreamManager::DetectorState s) {
 
