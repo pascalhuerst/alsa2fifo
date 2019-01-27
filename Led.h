@@ -33,15 +33,15 @@ public:
     static std::list<std::string> available();
     static std::unique_ptr<Led> create(const std::string &key);
 
-    Led( const Led& ) = delete; // non construction-copyable
-    Led& operator=( const Led& ) = delete; // non copyable
+    Led(const Led&) = delete; // non construction-copyable
+    Led& operator=(const Led&) = delete; // non copyable
 
     std::string info();
+    int maxBrightness();
+
     void on();
     void off();
     void set(int value);
-
-    void blink(int repeat, std::chrono::milliseconds intervall);
 
 private:
     const static std::string s_basePath;

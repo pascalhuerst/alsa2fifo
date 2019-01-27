@@ -28,6 +28,24 @@ namespace po = boost::program_options;
 
 using namespace moodycamel;
 
+class File {
+public:
+    File(const File&) = delete;
+    File& operator=(const File&) = delete ;
+    File(const std::string path, int oflag) : m_fd(::open(path.c_str(), oflag))
+    {
+        if (m_fd < 0)
+            throw std::invalid_argument(path + ": " + strerror(errno));
+    }
+
+    ~File() { close(m_fd); }
+
+    operator int() const { return m_fd; }
+private:
+    int m_fd;
+};
+
+
 class AudioStreamManager {
 
 public:
@@ -68,4 +86,13 @@ private:
     std::string m_streamPcmOutChunkSize;
 
     Callback m_detectorStateChangedCB;
+
+    size_t fifoSize(int fd);
+    int fifoBytesAvailable(int fd);
+
+    bool isFifo(int fd);
+    bool isValidPath(const std::string& path);
+    void createFifo(const std::string& path);
+    size_t setFifoSize(int fd, size_t s);
+    bool fifoHasReader(const std::string &path);
 };

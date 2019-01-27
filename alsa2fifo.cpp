@@ -104,9 +104,6 @@ int main(int argc, char **argv)
             std::cout << "led:    |" << l << std::endl;
         }
 
-        std::atomic<bool> terminateRequest = false;
-
-
         InputKey keys(vmCombined, 3);
         keys.registerKey(30, [](){ // a
             std::cout << "Press on key=30" << std::endl;
@@ -139,7 +136,6 @@ int main(int argc, char **argv)
         while((c = getchar()) != 'q') {
 
             if (c == 't') {
-                std::cout << "StreamManager is currently " << (isRunning ? "running" : "not running") << " toggle!" << std::endl;
                 if (!isRunning) {
                     streamManager.start();
                     isRunning = true;
@@ -147,6 +143,7 @@ int main(int argc, char **argv)
                     streamManager.stop();
                     isRunning = false;
                 }
+                std::cout << "StreamManager is currently " << (isRunning ? "running" : "not running") << " toggle!" << std::endl;
 
             } else {
                 std::cout << "Nice key: " << static_cast<char>(c) << std::endl;
@@ -161,7 +158,7 @@ int main(int argc, char **argv)
 
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
-        terminateRequest = true;
+        streamManager.stop();
 
     } catch (std::invalid_argument &e) {
 

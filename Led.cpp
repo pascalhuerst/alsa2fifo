@@ -37,7 +37,6 @@ Led::Led(const std::string& key) :
 
 Led::~Led()
 {
-
     close(m_fd);
 }
 
@@ -71,6 +70,11 @@ std::string Led::info()
     std::string ret = m_key + std::string(": max_brightness: ") + std::to_string(m_maxBrightness) + std::string(" | fd: ") + std::to_string(m_fd);
 
     return ret;
+}
+
+int Led::maxBrightness()
+{
+    return m_maxBrightness;
 }
 
 void Led::on()
@@ -108,13 +112,16 @@ int Led::open(const std::string& path)
 int Led::maxBrightness(const std::string &path)
 {
     int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0)
+        throw std::runtime_error(std::string("Can not open max_brightness: ") + path + " - " + strerror(errno));
 
     char buf[16];
     ssize_t ret = read(fd, buf, 16);
-    if (ret < 0)
-        throw std::runtime_error(std::string("Can not open max_brightness: ") + path + " - " + strerror(errno));
-
+    int cpErrno = errno;
     close(fd);
+
+    if (ret < 0)
+        throw std::runtime_error(std::string("Can not read max_brightness: ") + path + " - " + strerror(cpErrno));
 
     return atoi(buf);
 }

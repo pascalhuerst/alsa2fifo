@@ -19,6 +19,8 @@
 #include "params.h"
 #include "types.h"
 
+#include <sys/ioctl.h>
+#include <signal.h>
 #include <stdint.h>
 #include <sys/time.h>
 #include <poll.h>
@@ -26,6 +28,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
 
 AudioStreamManager::AudioStreamManager(const po::variables_map &vmCombined,
                                        Callback onDetectorStateChangedCB) :
@@ -60,17 +63,14 @@ void AudioStreamManager::start()
         if (m_vmCombined.count(strOptStreamManagerFifo)) {
             m_streamFifo = m_vmCombined[strOptStreamManagerFifo].as<std::string>();
 
-            struct stat st;
-            int fd = open(m_streamFifo.c_str(), O_RDWR);
-            if (fd < 0)
-                throw std::invalid_argument(strOptStreamManagerFifo + ": " + strerror(errno));
-
-            if (fstat(fd, &st) < 0)
-                throw std::invalid_argument(strOptStreamManagerFifo + ": " + strerror(errno));
-
-            if (!S_ISFIFO(st.st_mode))
-                throw std::invalid_argument(m_streamFifo + " is not a named pipe / fifo.");
-
+            if (!isValidPath(m_streamFifo)) {
+                std::cout << "Fifo: " + m_streamFifo + " does not exist. Creating." << std::endl;
+                createFifo(m_streamFifo);
+                std::cout << "Pipe created at: " << m_streamFifo << " with size: " << static_cast<float>(fifoSize(File(m_streamFifo.c_str(), O_RDWR)) / 1024.0) << "kb" << std::endl;
+            } else {
+                if (!isFifo(File(m_streamFifo.c_str(), O_RDWR)))
+                    throw std::invalid_argument(m_streamFifo + " is not a fifo.");
+            }
         } else {
             throw std::invalid_argument(strOptStreamManagerFifo + " must be set!");
         }
@@ -148,6 +148,7 @@ void AudioStreamManager::start()
                                    for (size_t i=0; i<numFrames; ++i) {
                                        m_streamBuffer->enqueue(frames[i]);
                                        m_detectorBuffer->enqueue(frames[i]);
+
                                    }
                                }));
 
@@ -155,66 +156,83 @@ void AudioStreamManager::start()
         m_streamWorker.reset(new std::thread([&] {
 
             try {
+                // Ignore SIGPIPE. Otherwise we terminate if reader disappears. Instead, we want start from the beginning
+                ::signal(SIGPIPE, SIG_IGN);
 
                 const size_t chunkSize = 1024;
                 SampleFrame buffer[chunkSize];
 
-                int fifoFd = ::open(m_streamFifo.c_str(), O_WRONLY);
-                if (fifoFd < 0) {
-                    std::string msg;
-                    msg = "Can not open fifo: (" + m_streamFifo + ") - " + strerror(errno);
-                    throw std::runtime_error(msg);
+                int counter = 0;
+                while (!fifoHasReader(m_streamFifo) && !m_terminateRequest) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    if ((++counter) % 10 == 0) {
+                        std::cout << "Pipe has no reader. (" << (counter>>1) << "s)" << std::endl;
+                    }
                 }
+
+                // Now we had a reader. Open blocking.
+                File fifoFd = File(m_streamFifo, O_WRONLY);
 
                 while (!m_terminateRequest) {
 
                     size_t i=0;
                     while (i<chunkSize && !m_terminateRequest) {
-                        auto ret = m_streamBuffer->wait_dequeue_timed(buffer[i], std::chrono::milliseconds(500));
-                        if (!ret)
+                        if(!m_streamBuffer->wait_dequeue_timed(buffer[i++], std::chrono::milliseconds(500)))
                             continue;
-
-                        i++;
                     }
+
+                    if (m_terminateRequest)
+                        continue;
 
                     size_t byteSize = chunkSize * sizeof(SampleFrame);
                     size_t bytesWritten = 0;
 
                     uint8_t *byteBuffer = reinterpret_cast<uint8_t*>(buffer);
 
-
-                    while (bytesWritten < byteSize) {
+                    while (bytesWritten < byteSize && !m_terminateRequest) {
 
                         struct pollfd pfd = {0, 0, 0};
                         pfd.fd = fifoFd;
                         pfd.events = POLLOUT;
 
                         int ret = poll(&pfd, 1, 500);
-                        if (m_terminateRequest)
-                            return;
 
                         if (ret == 0) { //Timeout
+                            int availableBytes = fifoBytesAvailable(fifoFd);
+                            size_t size = fifoSize(fifoFd);
+
+                            std::cout << "Writing to Fifo timed out:\n";
+                            std::cout << "available:  " << availableBytes << "\n";
+                            std::cout << "size:       " << size << "\n";
+                            std::cout << "Level:      " << (static_cast<float>(availableBytes) / static_cast<float>(availableBytes)) << "\n";
+
                             continue;
+
                         } else if (ret < 0) {
-                            std::string msg("Error in poll(): ");
-                            msg = msg + strerror(errno);
-                            throw std::runtime_error(msg);
+                            throw std::runtime_error(std::string("Error in poll(): ") + strerror(errno));
+
+                        } // ret>0 -> Some data can be written
+
+                        ssize_t written = 0;
+                        while ((written = ::write(fifoFd, &byteBuffer[bytesWritten], byteSize - bytesWritten)) < 0 && errno == EPIPE && !m_terminateRequest) {
+                            std::cout << "Fifo lost reader! write throws SIGPIPE. Waiting 500ms." << std::endl;
+                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
                         }
 
-                        ssize_t written = write(fifoFd, &byteBuffer[bytesWritten], byteSize - bytesWritten);
-                        if (written < 0) {
-                            std::string msg;
-                            msg = "Error writing to fifo: (" + m_streamFifo + ") - " + strerror(errno);
-                            throw std::runtime_error(msg);
-                        }
+                        if (m_terminateRequest)
+                            continue;
+
+                        if (written < 0)
+                            throw std::runtime_error(std::string("Error writing to fifo: (") + m_streamFifo + ") - " + strerror(errno));
 
                         bytesWritten += static_cast<size_t>(written);
                     }
                 }
-            } catch (std::runtime_error &e) {
-
+            } catch (std::exception &e) {
                 m_terminateRequest = true;
-                m_detectorWorker->join();
+                if (m_detectorWorker->joinable())
+                    m_detectorWorker->join();
+
                 throw e;
             }
         }));
@@ -296,4 +314,76 @@ void AudioStreamManager::stop()
         m_streamBuffer.reset();
         m_detectorBuffer.reset();
     }
+}
+
+size_t AudioStreamManager::fifoSize(int fd)
+{
+    int ret = fcntl(fd, F_GETPIPE_SZ);
+    if (ret < 0)
+        throw std::invalid_argument(std::string("Can not get fifo size. ") + m_streamFifo + ": " + strerror(errno));
+
+    return static_cast<size_t>(ret);
+}
+
+int AudioStreamManager::fifoBytesAvailable(int fd)
+{
+    int nbytes = 0;
+    int ret = ::ioctl(fd, FIONREAD, &nbytes);
+    if (ret < 0)
+        throw std::invalid_argument(std::string("Can not determin available bytes to read. ") + m_streamFifo + ": " + strerror(errno));
+
+    return ret;
+}
+
+bool AudioStreamManager::isFifo(int fd)
+{
+    bool ret = true;
+    struct stat st;
+
+    if (fstat(fd, &st) < 0)
+        throw std::invalid_argument(strOptStreamManagerFifo + ": " + strerror(errno));
+
+    if (!S_ISFIFO(st.st_mode))
+        ret = false;
+
+    return ret;
+}
+
+bool AudioStreamManager::isValidPath(const std::string &path)
+{
+    bool ret = true;
+
+    int fd = ::open(path.c_str(), O_RDWR);
+    if (fd < 0)
+        ret = false;
+    else
+        close(fd);
+
+    return ret;
+}
+
+void AudioStreamManager::createFifo(const std::string &path)
+{
+    int ret = ::mkfifo(path.c_str(), 0777);
+    if (ret < 0)
+        throw std::invalid_argument("Can not create fifo " + path + ": " + strerror(errno));
+}
+
+size_t AudioStreamManager::setFifoSize(int fd, size_t s)
+{
+    int ret = fcntl(fd, F_SETPIPE_SZ, s);
+    if (ret < 0)
+        throw std::invalid_argument(std::string("Can not set fifo size. ") + m_streamFifo + ": " + strerror(errno));
+
+    return fifoSize(fd);
+}
+
+bool AudioStreamManager::fifoHasReader(const std::string &path)
+{
+    int fd = ::open(path.c_str(), O_WRONLY | O_NONBLOCK);
+    if (fd < 0)
+        return false;
+
+    close(fd);
+    return true;
 }
