@@ -18,7 +18,7 @@
 
 #pragma once
 
-#include <asoundlib.h>
+#include <alsa/asoundlib.h>
 #include <functional>
 #include <thread>
 #include <atomic>

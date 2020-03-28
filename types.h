@@ -20,7 +20,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-#include <asoundlib.h>
+#include <alsa/asoundlib.h>
 #include <iostream>
 
 using Sample = int16_t;

@@ -31,7 +31,7 @@ namespace po = boost::program_options;
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <asoundlib.h>
+#include <alsa/asoundlib.h>
 #include <stdint.h>
 
 #include "types.h"
@@ -97,12 +97,19 @@ int main(int argc, char **argv)
             usage(odCombined);
         }
 
-        std::string key = "tpacpi::kbd_backlight";
+        //std::string key = "tpacpi::kbd_backlight";
+        std::string key = "input3::capslock";
         auto led = Led::create(key);
+
+
 
         for (auto &l : Led::available()) {
             std::cout << "led:    |" << l << std::endl;
         }
+
+
+        
+
 
         InputKey keys(vmCombined, 3);
         keys.registerKey(30, [](){ // a
@@ -156,7 +163,7 @@ int main(int argc, char **argv)
             else
                 led->off();
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         streamManager.stop();
 
