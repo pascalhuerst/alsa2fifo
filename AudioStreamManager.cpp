@@ -33,19 +33,22 @@
 AudioStreamManager::AudioStreamManager(const po::variables_map &vmCombined,
                                        Callback onDetectorStateChangedCB) :
     m_terminateRequest(true),
+    m_writeRawPcm(false),
     m_vmCombined(vmCombined),
     m_streamBuffer(nullptr),
     m_detectorBuffer(nullptr),
+    m_localStoreBuffer(nullptr),
     m_alsaAudioInput(nullptr),
     m_streamWorker(nullptr),
     m_detectorWorker(nullptr),
+    m_localStoreWorker(nullptr),
     m_detectorBufferSize(0),
     m_detectorSuccession(0),
     m_detectorThreshold(0.0),
     m_streamFifo(""),
-    m_streamPcmOutDir(""),
+    m_LocalStoreOutDir(""),
     m_streamPcmOutPrefix(""),
-    m_streamPcmOutChunkSize(""),
+    m_streamLocalStoreChunkSize(0),
     m_detectorStateChangedCB(onDetectorStateChangedCB)
 {
 }
@@ -74,34 +77,44 @@ void AudioStreamManager::start()
         } else {
             throw std::invalid_argument(strOptStreamManagerFifo + " must be set!");
         }
-#if 0
-        if (m_vmCombined.count(strOptStreamManagerPcmOurDir)) {
-            m_streamPcmOutDir = m_vmCombined[strOptStreamManagerPcmOurDir].as<std::string>();
+#if 1
+        if (m_vmCombined.count(strOptStreamManagerLocalStoreOutputDir)) {
+            m_LocalStoreOutDir = m_vmCombined[strOptStreamManagerLocalStoreOutputDir].as<std::string>();
+
+            # if 0
+            std::cout << "###" << m_LocalStoreOutDir.c_str() << std::endl;
 
             struct stat st;
-            int fd = open(m_streamPcmOutDir.c_str(), O_DIRECTORY);
+            int fd = open(m_LocalStoreOutDir.c_str(), O_DIRECTORY);
             if (fd < 0)
-                throw std::invalid_argument(m_streamPcmOutDir + ": " + strerror(errno));
+                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
 
             if (fstat(fd, &st) < 0)
-                throw std::invalid_argument(m_streamPcmOutDir + ": " + strerror(errno));
+                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
 
             if (!S_ISDIR(fd))
-                throw std::invalid_argument(m_streamPcmOutDir + " is not a directory.");
+                throw std::invalid_argument(m_LocalStoreOutDir + " is not a directory.");
+            
+            #endif
         } else {
-            throw std::invalid_argument(strOptStreamManagerPcmOurDir + " must be set!");
+            throw std::invalid_argument(strOptStreamManagerLocalStoreOutputDir + " must be set!");
         }
 
-        if (m_vmCombined.count(strOptStreamManagerPcmOutPrefix)) {
-            m_streamPcmOutPrefix = m_vmCombined[strOptStreamManagerPcmOutPrefix].as<std::string>();
+        if (m_vmCombined.count(strOptStreamManagerLocalStorePrefix)) {
+            m_streamPcmOutPrefix = m_vmCombined[strOptStreamManagerLocalStorePrefix].as<std::string>();
         } else {
-            throw std::invalid_argument(strOptStreamManagerPcmOutPrefix + " must be set!");
+            throw std::invalid_argument(strOptStreamManagerLocalStorePrefix + " must be set!");
         }
-#endif
 
         if (m_vmCombined.count(strOptStreamManagerPcmOutChunkSize)) {
-            m_streamPcmOutChunkSize = m_vmCombined[strOptStreamManagerPcmOutChunkSize].as<std::string>();
+            m_streamLocalStoreChunkSize = m_vmCombined[strOptStreamManagerPcmOutChunkSize].as<unsigned long>();
+            std::cout << "m_streamLocalStoreChunkSize is: " << m_streamLocalStoreChunkSize << std::endl;
+        } else {
+            throw std::invalid_argument(strOptStreamManagerPcmOutChunkSize + " must be set!");
         }
+
+        m_localStoreBuffer.reset(new BlockingReaderWriterQueue<SampleFrame>(m_streamLocalStoreChunkSize));
+#endif
 
         unsigned int streamBufferSize = 0;
         if (m_vmCombined.count(strOptStreamManagerStreamBufferSize)) {
@@ -143,33 +156,33 @@ void AudioStreamManager::start()
         m_detectorSuccession = static_cast<unsigned int>(detectorTotalTime / detectorWindowTime + 0.5);
         m_detectorBuffer.reset(new BlockingReaderWriterQueue<SampleFrame>(m_detectorBufferSize));
 
+
         // Instatiation and lambda callback from alsa. Just fill out ringbuffers
         m_alsaAudioInput.reset(new AlsaAudioInput(m_vmCombined, [&] (SampleFrame *frames, size_t numFrames) {
                                    for (size_t i=0; i<numFrames; ++i) {
                                        m_streamBuffer->enqueue(frames[i]);
                                        m_detectorBuffer->enqueue(frames[i]);
-
+                                       m_localStoreBuffer->enqueue(frames[i]);
                                    }
                                }));
 
         // Stream lamda in a thread
         m_streamWorker.reset(new std::thread([&] {
+            // Ignore SIGPIPE. Otherwise we terminate if reader disappears. Instead, we want start from the beginning
+            ::signal(SIGPIPE, SIG_IGN);
 
-            try {
-                // Ignore SIGPIPE. Otherwise we terminate if reader disappears. Instead, we want start from the beginning
-                ::signal(SIGPIPE, SIG_IGN);
+            const size_t chunkSize = 1024;
+            SampleFrame buffer[chunkSize];
 
-                const size_t chunkSize = 1024;
-                SampleFrame buffer[chunkSize];
-
-                int counter = 0;
-                while (!fifoHasReader(m_streamFifo) && !m_terminateRequest) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                    if ((++counter) % 10 == 0) {
-                        std::cout << "Pipe has no reader. (" << (counter>>1) << "s)" << std::endl;
-                    }
+            int counter = 0;
+            while (!fifoHasReader(m_streamFifo) && !m_terminateRequest) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                if ((++counter) % 10 == 0) {
+                    std::cout << "Pipe has no reader. (" << (counter>>1) << "s)" << std::endl;
                 }
+            }
 
+            if (!m_terminateRequest) {
                 // Now we had a reader. Open blocking.
                 File fifoFd = File(m_streamFifo, O_WRONLY);
 
@@ -190,50 +203,49 @@ void AudioStreamManager::start()
                     uint8_t *byteBuffer = reinterpret_cast<uint8_t*>(buffer);
 
                     while (bytesWritten < byteSize && !m_terminateRequest) {
+                        try {
+                            struct pollfd pfd = {0, 0, 0};
+                            pfd.fd = fifoFd;
+                            pfd.events = POLLOUT;
 
-                        struct pollfd pfd = {0, 0, 0};
-                        pfd.fd = fifoFd;
-                        pfd.events = POLLOUT;
+                            int ret = poll(&pfd, 1, 500);
 
-                        int ret = poll(&pfd, 1, 500);
+                            if (ret == 0) { //Timeout
+                                int availableBytes = fifoBytesAvailable(fifoFd);
+                                size_t size = fifoSize(fifoFd);
 
-                        if (ret == 0) { //Timeout
-                            int availableBytes = fifoBytesAvailable(fifoFd);
-                            size_t size = fifoSize(fifoFd);
+                                std::cout << "Writing to Fifo timed out:\n";
+                                std::cout << "available:  " << availableBytes << "\n";
+                                std::cout << "size:       " << size << "\n";
+                                std::cout << "Level:      " << (static_cast<float>(availableBytes) / static_cast<float>(availableBytes)) << "\n";
 
-                            std::cout << "Writing to Fifo timed out:\n";
-                            std::cout << "available:  " << availableBytes << "\n";
-                            std::cout << "size:       " << size << "\n";
-                            std::cout << "Level:      " << (static_cast<float>(availableBytes) / static_cast<float>(availableBytes)) << "\n";
+                                continue;
 
+                            } else if (ret < 0) {
+                                throw std::runtime_error(std::string("Error in poll(): ") + strerror(errno));
+
+                            } // ret>0 -> Some data can be written
+
+                            ssize_t written = 0;
+                            while ((written = ::write(fifoFd, &byteBuffer[bytesWritten], byteSize - bytesWritten)) < 0 && errno == EPIPE && !m_terminateRequest) {
+                                std::cout << "Fifo lost reader! write throws SIGPIPE. Waiting 500ms." << std::endl;
+                                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                            }
+
+                            if (m_terminateRequest)
+                                continue;
+
+                            if (written < 0)
+                                throw std::runtime_error(std::string("Error writing to fifo: (") + m_streamFifo + ") - " + strerror(errno));
+
+                            bytesWritten += static_cast<size_t>(written);
+                        
+                        } catch (std::exception &e) {
+                            std::cerr << e.what() << std::endl;
                             continue;
-
-                        } else if (ret < 0) {
-                            throw std::runtime_error(std::string("Error in poll(): ") + strerror(errno));
-
-                        } // ret>0 -> Some data can be written
-
-                        ssize_t written = 0;
-                        while ((written = ::write(fifoFd, &byteBuffer[bytesWritten], byteSize - bytesWritten)) < 0 && errno == EPIPE && !m_terminateRequest) {
-                            std::cout << "Fifo lost reader! write throws SIGPIPE. Waiting 500ms." << std::endl;
-                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
                         }
-
-                        if (m_terminateRequest)
-                            continue;
-
-                        if (written < 0)
-                            throw std::runtime_error(std::string("Error writing to fifo: (") + m_streamFifo + ") - " + strerror(errno));
-
-                        bytesWritten += static_cast<size_t>(written);
                     }
                 }
-            } catch (std::exception &e) {
-                m_terminateRequest = true;
-                if (m_detectorWorker->joinable())
-                    m_detectorWorker->join();
-
-                throw e;
             }
         }));
 
@@ -241,7 +253,6 @@ void AudioStreamManager::start()
         m_detectorWorker.reset(new std::thread([&] {
 
             SampleFrame buffer[m_detectorBufferSize];
-
             DetectorState currentState = STATE_SILENT;
             unsigned int rmsCounter = 0;
 
@@ -268,12 +279,13 @@ void AudioStreamManager::start()
                 double rms = sqrt(chunkSumMean);
                 double rmsPercent = 100.0 * rms / static_cast<double>(std::numeric_limits<Sample>::max());
 
-                //std::cout << "rms: " << rmsPercent << "%" << std::endl;
-
                 if (rmsPercent < m_detectorThreshold) {
                     if (rmsCounter > 0) {
                         rmsCounter--;
                         if (rmsCounter == 0 && currentState == STATE_SIGNAL) {
+                            // Stop writing chunks to drive
+                            m_writeRawPcm.store(false);
+                            
                             currentState = STATE_SILENT;
                             if (m_detectorStateChangedCB)
                                 m_detectorStateChangedCB(currentState);
@@ -283,10 +295,58 @@ void AudioStreamManager::start()
                     if (rmsCounter <= m_detectorSuccession) {
                         rmsCounter++;
                         if (rmsCounter == m_detectorSuccession && currentState == STATE_SILENT) {
+                            // Start writing chunks to drive
+                            m_writeRawPcm.store(true);
+                            
                             currentState = STATE_SIGNAL;
                             if (m_detectorStateChangedCB)
                                 m_detectorStateChangedCB(currentState);
                         }
+                    }
+                }
+            }
+        }));
+
+        // LocalStore lambda in a thread
+        m_localStoreWorker.reset(new std::thread([&] {
+            std::unique_ptr<SampleFrame[]> buffer(new SampleFrame[m_streamLocalStoreChunkSize]);
+
+            ssize_t totalBytes = 0;
+
+            while (!m_terminateRequest) {
+                size_t i=0;
+                while (i<m_streamLocalStoreChunkSize && !m_terminateRequest) {
+                    auto ret = m_localStoreBuffer->wait_dequeue_timed(buffer[i], std::chrono::milliseconds(500));            
+                    if (m_terminateRequest) return;
+                    if (!ret)
+                        continue;
+
+                    i++;
+                }
+
+                if (m_writeRawPcm.load()) {
+
+                    auto timeStampEpoche = std::chrono::system_clock::now();
+                    std::stringstream ss;
+                    ss <<  m_LocalStoreOutDir << "/" <<  m_streamPcmOutPrefix << timeStampEpoche.time_since_epoch().count() << ".raw";
+
+                    try {
+                        File fifoFd = File(ss.str(), O_WRONLY | O_CREAT, 0666);
+                        ssize_t written = ::write(fifoFd, buffer.get(), m_streamLocalStoreChunkSize * sizeof(SampleFrame));
+                        if (written < 0) {
+                            throw std::runtime_error(std::string("Error writing to file: (") + ss.str() + ") - " + strerror(errno));
+                        }
+
+                        totalBytes += written;
+                        std::cout << totalBytes << " Bytes ("  << (static_cast<float>(totalBytes) / (1024.0*1024.0))
+                                  <<  " MB) written to chunks in " << m_LocalStoreOutDir << std::endl;
+
+                        if (static_cast<unsigned long>(written) < m_streamLocalStoreChunkSize) {
+                            std::cout << "Less written than expected: " << written << " instead of " << m_streamLocalStoreChunkSize << std::endl;
+                        }
+                    } catch (std::exception &e) {
+                        std::cerr << e.what() << std::endl;
+                        continue;
                     }
                 }
             }
@@ -298,21 +358,27 @@ void AudioStreamManager::stop()
 {
     if (!m_terminateRequest) {
 
-        m_terminateRequest = true;
+        m_terminateRequest.store(true);
+
+        if (m_streamWorker->joinable()) {
+            m_streamWorker->join();
+            m_streamWorker.reset();
+        }
 
         if (m_detectorWorker->joinable()) {
             m_detectorWorker->join();
             m_detectorWorker.reset();
         }
 
-        if (m_streamWorker->joinable()) {
-            m_streamWorker->join();
-            m_detectorWorker.reset();
+        if (m_localStoreWorker->joinable()) {
+            m_localStoreWorker->join();
+            m_localStoreWorker.reset();
         }
 
         m_alsaAudioInput.reset();
         m_streamBuffer.reset();
         m_detectorBuffer.reset();
+        m_localStoreBuffer.reset();
     }
 }
 

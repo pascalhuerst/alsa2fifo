@@ -77,8 +77,9 @@ int main(int argc, char **argv)
         odStreamManager.add_options()
                 (strOptStreamManagerFifo.c_str(), po::value<std::string>()->default_value("/tmp/stream_pipe"), "Named pipe to write raw samples to")
                 (strOptStreamManagerStreamBufferSize.c_str(), po::value<unsigned int>()->default_value(4096), "Ring buffer size in frames for pipe stream")
-                (strOptStreamManagerPcmOurDir.c_str(), po::value<std::string>(), "Directory to store raw pcm data chunks to")
-                (strOptStreamManagerPcmOutChunkSize.c_str(), po::value<unsigned int>(), "Chunk size for raw pcm files");
+                (strOptStreamManagerLocalStoreOutputDir.c_str(), po::value<std::string>(), "Directory to store raw pcm data chunks to")
+                (strOptStreamManagerPcmOutChunkSize.c_str(), po::value<unsigned long>(), "Chunk size for raw pcm files")
+                (strOptStreamManagerLocalStorePrefix.c_str(), po::value<std::string>(), "Prefix for raw pcm files");
 
         // ########## Detector Options ##########
         po::options_description odDetector("Detector");
@@ -97,19 +98,14 @@ int main(int argc, char **argv)
             usage(odCombined);
         }
 
+/*
         //std::string key = "tpacpi::kbd_backlight";
         std::string key = "input3::capslock";
         auto led = Led::create(key);
 
-
-
         for (auto &l : Led::available()) {
             std::cout << "led:    |" << l << std::endl;
         }
-
-
-        
-
 
         InputKey keys(vmCombined, 3);
         keys.registerKey(30, [](){ // a
@@ -125,7 +121,7 @@ int main(int argc, char **argv)
         }, [](std::chrono::milliseconds t){
             std::cout << "Release on key=31 t=" << t.count() << "ms" << std::endl;
         });
-
+*/
         AudioStreamManager streamManager(vmCombined, [&](AudioStreamManager::DetectorState s) {
 
             if (s == AudioStreamManager::STATE_SIGNAL) {
@@ -142,11 +138,15 @@ int main(int argc, char **argv)
         std::cout << "To start the shit, press t: " << std::endl;
         while((c = getchar()) != 'q') {
 
+            std::cout << "key=" << c << std::endl;
+
             if (c == 't') {
                 if (!isRunning) {
+                    std::cout << "STARTING" << c << std::endl;
                     streamManager.start();
                     isRunning = true;
                 } else {
+                    std::cout << "STOPPING" << c << std::endl;
                     streamManager.stop();
                     isRunning = false;
                 }
@@ -156,13 +156,14 @@ int main(int argc, char **argv)
                 std::cout << "Nice key: " << static_cast<char>(c) << std::endl;
             }
 
+#if 0
             // Toggle Led for fun
             ledOn = !ledOn;
             if (ledOn)
                 led->on();
             else
                 led->off();
-
+#endif
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         streamManager.stop();

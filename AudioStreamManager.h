@@ -32,7 +32,7 @@ class File {
 public:
     File(const File&) = delete;
     File& operator=(const File&) = delete ;
-    File(const std::string path, int oflag) : m_fd(::open(path.c_str(), oflag))
+    File(const std::string path, int oflag, int mode = 0) : m_fd(::open(path.c_str(), oflag, mode))
     {
         if (m_fd < 0)
             throw std::invalid_argument(path + ": " + strerror(errno));
@@ -66,24 +66,27 @@ public:
 
 private:
     std::atomic<bool> m_terminateRequest;
+    std::atomic<bool> m_writeRawPcm;
 
     po::variables_map m_vmCombined;
 
     std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_streamBuffer;
     std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_detectorBuffer;
+    std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_localStoreBuffer;
 
     std::unique_ptr<AlsaAudioInput> m_alsaAudioInput;
     std::unique_ptr<std::thread> m_streamWorker;
     std::unique_ptr<std::thread> m_detectorWorker;
+    std::unique_ptr<std::thread> m_localStoreWorker;
 
     size_t m_detectorBufferSize;
     unsigned int m_detectorSuccession;
     double m_detectorThreshold;
 
     std::string m_streamFifo;
-    std::string m_streamPcmOutDir;
+    std::string m_LocalStoreOutDir;
     std::string m_streamPcmOutPrefix;
-    std::string m_streamPcmOutChunkSize;
+    unsigned long m_streamLocalStoreChunkSize;
 
     Callback m_detectorStateChangedCB;
 
@@ -96,3 +99,4 @@ private:
     size_t setFifoSize(int fd, size_t s);
     bool fifoHasReader(const std::string &path);
 };
+

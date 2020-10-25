@@ -36,8 +36,8 @@ const std::string strOptAudioLatency = "latency";
 const std::string strOptStreamManagerFifo = "fifo";
 const std::string strOptStreamManagerStreamBufferSize = "stream-buffer-size";
 
-const std::string strOptStreamManagerPcmOurDir = "pcm-out-dir";
-const std::string strOptStreamManagerPcmOutPrefix = "pcm-out-prefix";
+const std::string strOptStreamManagerLocalStoreOutputDir = "pcm-out-dir";
+const std::string strOptStreamManagerLocalStorePrefix = "pcm-out-prefix";
 const std::string strOptStreamManagerPcmOutChunkSize = "pcm-out-chunks-size";
 
 // ########## Detector Options ##########
