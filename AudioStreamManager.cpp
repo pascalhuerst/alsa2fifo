@@ -77,12 +77,9 @@ void AudioStreamManager::start()
         } else {
             throw std::invalid_argument(strOptStreamManagerFifo + " must be set!");
         }
-#if 1
+
         if (m_vmCombined.count(strOptStreamManagerLocalStoreOutputDir)) {
             m_LocalStoreOutDir = m_vmCombined[strOptStreamManagerLocalStoreOutputDir].as<std::string>();
-
-            # if 0
-            std::cout << "###" << m_LocalStoreOutDir.c_str() << std::endl;
 
             struct stat st;
             int fd = open(m_LocalStoreOutDir.c_str(), O_DIRECTORY);
@@ -95,7 +92,6 @@ void AudioStreamManager::start()
             if (!S_ISDIR(fd))
                 throw std::invalid_argument(m_LocalStoreOutDir + " is not a directory.");
             
-            #endif
         } else {
             throw std::invalid_argument(strOptStreamManagerLocalStoreOutputDir + " must be set!");
         }
@@ -114,7 +110,6 @@ void AudioStreamManager::start()
         }
 
         m_localStoreBuffer.reset(new BlockingReaderWriterQueue<SampleFrame>(m_streamLocalStoreChunkSize));
-#endif
 
         unsigned int streamBufferSize = 0;
         if (m_vmCombined.count(strOptStreamManagerStreamBufferSize)) {
@@ -312,6 +307,7 @@ void AudioStreamManager::start()
             std::unique_ptr<SampleFrame[]> buffer(new SampleFrame[m_streamLocalStoreChunkSize]);
 
             ssize_t totalBytes = 0;
+            ssize_t totalChunks = 0;
 
             while (!m_terminateRequest) {
                 size_t i=0;
@@ -326,9 +322,12 @@ void AudioStreamManager::start()
 
                 if (m_writeRawPcm.load()) {
 
+                    totalChunks++;
+
                     auto timeStampEpoche = std::chrono::system_clock::now();
                     std::stringstream ss;
-                    ss <<  m_LocalStoreOutDir << "/" <<  m_streamPcmOutPrefix << timeStampEpoche.time_since_epoch().count() << ".raw";
+                    ss <<  m_LocalStoreOutDir << "/" <<  m_streamPcmOutPrefix << "_" << totalChunks 
+                       << "_" << timeStampEpoche.time_since_epoch().count() << ".raw";
 
                     try {
                         File fifoFd(ss.str(), O_WRONLY | O_CREAT, 0666);
