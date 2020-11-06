@@ -41,6 +41,6 @@ const std::string strOptStreamManagerLocalStorePrefix = "pcm-out-prefix";
 const std::string strOptStreamManagerPcmOutChunkSize = "pcm-out-chunks-size";
 
 // ########## Detector Options ##########
-const std::string strOptDetectorTotalTime = "total-time";
+const std::string strOptDetectorTotalTime = "rest-time";
 const std::string strOptDetectorWindowTime = "window-time";
 const std::string strOptDetectorThreshold = "detector-threshold";
