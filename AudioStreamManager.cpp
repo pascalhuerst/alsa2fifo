@@ -184,7 +184,7 @@ void AudioStreamManager::start()
 
             if (!m_terminateRequest) {
                 // Now we had a reader. Open blocking.
-                File fifoFd = File(m_streamFifo, O_WRONLY);
+                File fifoFd(m_streamFifo, O_WRONLY);
 
                 while (!m_terminateRequest) {
 
@@ -331,7 +331,7 @@ void AudioStreamManager::start()
                     ss <<  m_LocalStoreOutDir << "/" <<  m_streamPcmOutPrefix << timeStampEpoche.time_since_epoch().count() << ".raw";
 
                     try {
-                        File fifoFd = File(ss.str(), O_WRONLY | O_CREAT, 0666);
+                        File fifoFd(ss.str(), O_WRONLY | O_CREAT, 0666);
                         ssize_t written = ::write(fifoFd, buffer.get(), m_streamLocalStoreChunkSize * sizeof(SampleFrame));
                         if (written < 0) {
                             throw std::runtime_error(std::string("Error writing to file: (") + ss.str() + ") - " + strerror(errno));

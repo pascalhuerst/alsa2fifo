@@ -17,14 +17,11 @@
 
 #include "Led.h"
 #include <exception>
-#include <filesystem>
 #include <iterator>
 #include <algorithm>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-
-namespace fs = std::filesystem;
 
 const std::string Led::s_basePath = "/sys/class/leds";
 
@@ -38,24 +35,6 @@ Led::Led(const std::string& key) :
 Led::~Led()
 {
     close(m_fd);
-}
-
-//static
-std::list<std::string> Led::available()
-{
-    std::list<std::string> keys;
-
-    for(auto& p : fs::recursive_directory_iterator(Led::s_basePath)) {
-        try {
-            if(p.status().type() == fs::file_type::directory) {
-                keys.push_back(p.path().filename());
-            }
-        } catch (std::runtime_error &e) {
-            std::cerr << e.what() << std::endl;
-        }
-    }
-
-    return keys;
 }
 
 //static
