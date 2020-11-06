@@ -82,16 +82,16 @@ void AudioStreamManager::start()
         if (m_vmCombined.count(strOptStreamManagerLocalStoreOutputDir)) {
             m_LocalStoreOutDir = m_vmCombined[strOptStreamManagerLocalStoreOutputDir].as<std::string>();
 
-            struct stat st;
-            int fd = open(m_LocalStoreOutDir.c_str(), O_DIRECTORY);
-            if (fd < 0)
-                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
-
-            if (fstat(fd, &st) < 0)
-                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
-
-            if (!S_ISDIR(fd))
-                throw std::invalid_argument(m_LocalStoreOutDir + " is not a directory.");
+//            struct stat st;
+//            int fd = open(m_LocalStoreOutDir.c_str(), O_DIRECTORY);
+//            if (fd < 0)
+//                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
+//
+//            if (fstat(fd, &st) < 0)
+//                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
+//
+//            if (!S_ISDIR(fd))
+//                throw std::invalid_argument(m_LocalStoreOutDir + " is not a directory.");
             
         } else {
             throw std::invalid_argument(strOptStreamManagerLocalStoreOutputDir + " must be set!");
@@ -161,7 +161,7 @@ void AudioStreamManager::start()
                                        m_localStoreBuffer->enqueue(frames[i]);
                                    }
                                }));
-
+#if 0
         // Stream lamda in a thread
         m_streamWorker.reset(new std::thread([&] {
             // Ignore SIGPIPE. Otherwise we terminate if reader disappears. Instead, we want start from the beginning
@@ -244,7 +244,7 @@ void AudioStreamManager::start()
                 }
             }
         }));
-
+#endif
         // Detector lambda in a thread
         m_detectorWorker.reset(new std::thread([&] {
 
@@ -264,16 +264,20 @@ void AudioStreamManager::start()
                     i++;
                 }
 
-                long chunkSum = 0;
+                double chunkSum = 0.0;
                 for (unsigned int i=0; i<m_detectorBufferSize; ++i) {
 
-                    int monoSum = buffer[i].left + buffer[i].right;
+                    double monoSum = (buffer[i].left + buffer[i].right) / 2.0;
                     chunkSum += (monoSum * monoSum);
                 }
 
                 double chunkSumMean = static_cast<double>(chunkSum) / static_cast<double>(m_detectorBufferSize);
                 double rms = sqrt(chunkSumMean);
                 double rmsPercent = 100.0 * rms / static_cast<double>(std::numeric_limits<Sample>::max());
+
+		std::cout << "RMSPercent: " << rmsPercent << std::endl;
+		std::cout << "RMS       : " << rms << std::endl;
+
 
                 if (rmsPercent < m_detectorThreshold) {
                     if (rmsCounter > 0) {
