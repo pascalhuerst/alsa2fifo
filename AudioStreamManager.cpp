@@ -18,6 +18,7 @@
 #include "AudioStreamManager.h"
 #include "params.h"
 #include "types.h"
+#include "Led.h"
 
 #include <sys/ioctl.h>
 #include <signal.h>
@@ -306,6 +307,8 @@ void AudioStreamManager::start()
         m_localStoreWorker.reset(new std::thread([&] {
             std::unique_ptr<SampleFrame[]> buffer(new SampleFrame[m_streamLocalStoreChunkSize]);
 
+            auto chunkLed = Led::create("raumfeld:2");
+            bool ledToggle = false;
             ssize_t totalBytes = 0;
             ssize_t totalChunks = 0;
 
@@ -334,6 +337,14 @@ void AudioStreamManager::start()
                         ssize_t written = ::write(fifoFd, buffer.get(), m_streamLocalStoreChunkSize * sizeof(SampleFrame));
                         if (written < 0) {
                             throw std::runtime_error(std::string("Error writing to file: (") + ss.str() + ") - " + strerror(errno));
+                        }
+
+                        if (ledToggle) {
+                            ledToggle = false;
+                            chunkLed->off();
+                        } else {
+                            ledToggle = true;
+                            chunkLed->on();
                         }
 
                         totalBytes += written;

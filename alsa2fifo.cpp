@@ -44,9 +44,7 @@ namespace po = boost::program_options;
 
 void usage [[noreturn]] (const po::options_description &od)
 {
-    std::cout << "Triggered!" << std::endl;
     std::cout << od << std::endl;
-
     exit(EXIT_FAILURE);
 }
 
@@ -122,18 +120,22 @@ int main(int argc, char **argv)
             std::cout << "Release on key=31 t=" << t.count() << "ms" << std::endl;
         });
 */
+
+        auto signalLed = Led::create("raumfeld:1");
+
         AudioStreamManager streamManager(vmCombined, [&](AudioStreamManager::DetectorState s) {
 
             if (s == AudioStreamManager::STATE_SIGNAL) {
                 std::cout << "Signal detected!" << std::endl;
+                signalLed->on();
             } else {
                 std::cout << "Silence detected!" << std::endl;
+                signalLed->off();
             }
         });
 
         int c =0;
         bool isRunning = false;
-        bool ledOn = false;
 
         std::cout << "To start the shit, press t: " << std::endl;
         while((c = getchar()) != 'q') {
