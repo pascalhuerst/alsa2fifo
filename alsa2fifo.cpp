@@ -82,12 +82,19 @@ int main(int argc, char **argv)
         // ########## Detector Options ##########
         po::options_description odDetector("Detector");
         odDetector.add_options()
-                (strOptDetectorTotalTime.c_str(), po::value<double>()->default_value(10.0), "Total time a signal needs to rest before a status change occurs")
+                (strOptDetectorTotalTime.c_str(), po::value<double>()->default_value(5.0), "Total time a signal needs to rest before a status change occurs")
                 (strOptDetectorWindowTime.c_str(), po::value<double>()->default_value(1.0), "Time window used to analize input signal")
-                (strOptDetectorThreshold.c_str(), po::value<double>()->default_value(1.0), "Threshold in percent of rms signal per window to detect silence");
+                (strOptDetectorThreshold.c_str(), po::value<double>()->default_value(0.001), "Threshold in percent of rms signal per window to detect silence");
+
+        // ########## LED Options ##########
+        po::options_description odLed("Led");
+        odLed.add_options()
+                (strOptLedDetector.c_str(), po::value<std::string>(), "Use this led for detector state")
+                (strOptLedIndexer.c_str(), po::value<std::string>(), "Use this led for indexer state");
+
 
         // ########## Combined ##########
-        odCombined.add(odGeneric).add(odAudio).add(odStreamManager).add(odDetector);
+        odCombined.add(odGeneric).add(odAudio).add(odStreamManager).add(odDetector).add(odLed);
         po::variables_map vmCombined;
         po::store(po::parse_command_line(argc, argv, odCombined), vmCombined);
         po::notify(vmCombined);
@@ -96,42 +103,66 @@ int main(int argc, char **argv)
             usage(odCombined);
         }
 
-/*
-        //std::string key = "tpacpi::kbd_backlight";
-        std::string key = "input3::capslock";
-        auto led = Led::create(key);
-
-        for (auto &l : Led::available()) {
-            std::cout << "led:    |" << l << std::endl;
+        std::unique_ptr<Led> detectorLed = nullptr;
+        if (vmCombined.count(strOptLedDetector)) {
+            detectorLed = Led::create(vmCombined[strOptLedDetector].as<std::string>());
+            detectorLed->on();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            detectorLed->off();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            detectorLed->on();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            detectorLed->off();
         }
 
-        InputKey keys(vmCombined, 3);
-        keys.registerKey(30, [](){ // a
-            std::cout << "Press on key=30" << std::endl;
+        std::unique_ptr<Led> indexerLed = nullptr;
+        if (vmCombined.count(strOptLedIndexer)) {
+            indexerLed = Led::create(vmCombined[strOptLedIndexer].as<std::string>());
+            indexerLed->on();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            indexerLed->off();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            indexerLed->on();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            indexerLed->off();
+        }
 
-        }, [](std::chrono::milliseconds t){
-            std::cout << "Release on key=30 t=" << t.count() << "ms" << std::endl;
-        });
 
-        keys.registerKey(31, [](){ // s
-            std::cout << "Press on key=31" << std::endl;
+        AudioStreamManager streamManager(vmCombined,
+        
+            [&](AudioStreamManager::DetectorState s) {
+                std::cout << "detector:   " << s.rmsPercent << "  " 
+                          << (s.state == AudioStreamManager::STATE_SIGNAL ? "Signal" : "Silence") << std::endl;
+                if (detectorLed) {
+                    if (s.state == AudioStreamManager::STATE_SIGNAL) {
+                        detectorLed->on();
+                    } else {
+                        detectorLed->off();
+                        if (indexerLed) {
+                            indexerLed->off();
+                        }
+                    }
+                }
+            },
 
-        }, [](std::chrono::milliseconds t){
-            std::cout << "Release on key=31 t=" << t.count() << "ms" << std::endl;
-        });
-*/
+            [&](AudioStreamManager::LocalStoreState s){
 
-        auto signalLed = Led::create("raumfeld:1");
-        signalLed->off();
+                static bool toggle = false;
+                toggle = !toggle;
 
-        AudioStreamManager streamManager(vmCombined, [&](AudioStreamManager::DetectorState s) {
+                std::cout << "localStore: totalBytes=" << s.totalBytes << std::endl
+                          << "            totalChunks=" << s.totalChunks << std::endl
+                          << "            sessionCount=" << s.sessionID << std::endl;
 
-            if (s == AudioStreamManager::STATE_SIGNAL) {
-                signalLed->on();
-            } else {
-                signalLed->off();
+                if (indexerLed) {
+                    if (toggle) {
+                        indexerLed->on();
+                    } else {
+                        indexerLed->off();
+                    }
+                }
             }
-        });
+        );
 
         streamManager.start();
         while(getchar() != 'q') {

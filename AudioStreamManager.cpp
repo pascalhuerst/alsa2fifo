@@ -18,7 +18,6 @@
 #include "AudioStreamManager.h"
 #include "params.h"
 #include "types.h"
-#include "Led.h"
 
 #include <sys/ioctl.h>
 #include <signal.h>
@@ -32,7 +31,8 @@
 
 
 AudioStreamManager::AudioStreamManager(const po::variables_map &vmCombined,
-                                       Callback onDetectorStateChangedCB) :
+                                       CallbackDetector onDetectorStateChangedCB,
+                                       CallbackLocalStore onLocalStoreChangedCB) :
     m_terminateRequest(true),
     m_writeRawPcm(false),
     m_vmCombined(vmCombined),
@@ -50,7 +50,8 @@ AudioStreamManager::AudioStreamManager(const po::variables_map &vmCombined,
     m_LocalStoreOutDir(""),
     m_streamPcmOutPrefix(""),
     m_streamLocalStoreChunkSize(0),
-    m_detectorStateChangedCB(onDetectorStateChangedCB)
+    m_detectorStateChangedCB(onDetectorStateChangedCB),
+    m_localStoreChangedCB(onLocalStoreChangedCB)
 {
 }
 
@@ -81,18 +82,6 @@ void AudioStreamManager::start()
 
         if (m_vmCombined.count(strOptStreamManagerLocalStoreOutputDir)) {
             m_LocalStoreOutDir = m_vmCombined[strOptStreamManagerLocalStoreOutputDir].as<std::string>();
-
-//            struct stat st;
-//            int fd = open(m_LocalStoreOutDir.c_str(), O_DIRECTORY);
-//            if (fd < 0)
-//                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
-//
-//            if (fstat(fd, &st) < 0)
-//                throw std::invalid_argument(m_LocalStoreOutDir + ": " + strerror(errno));
-//
-//            if (!S_ISDIR(fd))
-//                throw std::invalid_argument(m_LocalStoreOutDir + " is not a directory.");
-            
         } else {
             throw std::invalid_argument(strOptStreamManagerLocalStoreOutputDir + " must be set!");
         }
@@ -105,7 +94,6 @@ void AudioStreamManager::start()
 
         if (m_vmCombined.count(strOptStreamManagerPcmOutChunkSize)) {
             m_streamLocalStoreChunkSize = m_vmCombined[strOptStreamManagerPcmOutChunkSize].as<unsigned long>();
-            std::cout << "m_streamLocalStoreChunkSize is: " << m_streamLocalStoreChunkSize << std::endl;
         } else {
             throw std::invalid_argument(strOptStreamManagerPcmOutChunkSize + " must be set!");
         }
@@ -149,7 +137,7 @@ void AudioStreamManager::start()
         }
 
         m_detectorBufferSize = static_cast<size_t>(static_cast<double>(rate) * detectorWindowTime);
-        m_detectorSuccession = static_cast<unsigned int>(detectorTotalTime / detectorWindowTime + 0.5);
+        m_detectorSuccession = static_cast<unsigned int>(detectorTotalTime / detectorWindowTime);
         m_detectorBuffer.reset(new BlockingReaderWriterQueue<SampleFrame>(m_detectorBufferSize));
 
 
@@ -249,7 +237,7 @@ void AudioStreamManager::start()
         m_detectorWorker.reset(new std::thread([&] {
 
             SampleFrame buffer[m_detectorBufferSize];
-            DetectorState currentState = STATE_SILENT;
+            DetectorState currentState = {0.0, STATE_SILENT};
             unsigned int rmsCounter = 0;
 
             while (!m_terminateRequest) {
@@ -273,37 +261,28 @@ void AudioStreamManager::start()
 
                 double chunkSumMean = static_cast<double>(chunkSum) / static_cast<double>(m_detectorBufferSize);
                 double rms = sqrt(chunkSumMean);
-                double rmsPercent = 100.0 * rms / static_cast<double>(std::numeric_limits<Sample>::max());
+                currentState.rmsPercent = 100.0 * rms / static_cast<double>(std::numeric_limits<Sample>::max());
 
-		std::cout << "RMSPercent: " << rmsPercent << std::endl;
-		std::cout << "RMS       : " << rms << std::endl;
-
-
-                if (rmsPercent < m_detectorThreshold) {
+                if (currentState.rmsPercent < m_detectorThreshold) {
                     if (rmsCounter > 0) {
                         rmsCounter--;
-                        if (rmsCounter == 0 && currentState == STATE_SIGNAL) {
-                            // Stop writing chunks to drive
-                            m_writeRawPcm.store(false);
-                            
-                            currentState = STATE_SILENT;
-                            if (m_detectorStateChangedCB)
-                                m_detectorStateChangedCB(currentState);
+                        if (rmsCounter == 0 && currentState.state == STATE_SIGNAL) {
+                            currentState.state = STATE_SILENT;
+                            m_writeRawPcm = false;
                         }
                     }
                 } else { // rmsPercent >= silenceThresholdPercent
                     if (rmsCounter <= m_detectorSuccession) {
                         rmsCounter++;
-                        if (rmsCounter == m_detectorSuccession && currentState == STATE_SILENT) {
-                            // Start writing chunks to drive
-                            m_writeRawPcm.store(true);
-                            
-                            currentState = STATE_SIGNAL;
-                            if (m_detectorStateChangedCB)
-                                m_detectorStateChangedCB(currentState);
+                        if (rmsCounter == m_detectorSuccession && currentState.state == STATE_SILENT) {
+                            currentState.state = STATE_SIGNAL;
+                            m_writeRawPcm = true;
                         }
                     }
                 }
+
+                if (m_detectorStateChangedCB)
+                    m_detectorStateChangedCB(currentState);
             }
         }));
 
@@ -311,10 +290,8 @@ void AudioStreamManager::start()
         m_localStoreWorker.reset(new std::thread([&] {
             std::unique_ptr<SampleFrame[]> buffer(new SampleFrame[m_streamLocalStoreChunkSize]);
 
-            auto chunkLed = Led::create("raumfeld:2");
-            bool ledToggle = false;
-            ssize_t totalBytes = 0;
-            ssize_t totalChunks = 0;
+            AudioStreamManager::LocalStoreState state = {0};
+            bool lastWriteRawPcmState = false;
 
             while (!m_terminateRequest) {
                 size_t i=0;
@@ -327,41 +304,47 @@ void AudioStreamManager::start()
                     i++;
                 }
 
-                if (m_writeRawPcm.load()) {
+                if (m_writeRawPcm) {
 
-                    totalChunks++;
+                    state.totalChunks++;
 
                     auto timeStampEpoche = std::chrono::system_clock::now();
                     std::stringstream ss;
-                    ss <<  m_LocalStoreOutDir << "/" <<  m_streamPcmOutPrefix << "_" << totalChunks 
-                       << "_" << timeStampEpoche.time_since_epoch().count() << ".raw";
+                    ss << timeStampEpoche.time_since_epoch().count();
+                    std::string strTimestamp = ss.str();
+
+                    char strChunkCount[24];
+                    sprintf(strChunkCount, "%016lu", state.totalChunks);
+
+                    if (!lastWriteRawPcmState) {
+                        lastWriteRawPcmState = true;
+                        state.sessionID = strTimestamp;
+                    }
+          
+                    std::string path = m_LocalStoreOutDir + "/" + m_streamPcmOutPrefix + "_" + state.sessionID + "_" + std::string(strChunkCount) + "_" + strTimestamp + ".raw";
 
                     try {
-                        File fifoFd(ss.str(), O_WRONLY | O_CREAT, 0666);
+                        File fifoFd(path, O_WRONLY | O_CREAT, 0666);
                         ssize_t written = ::write(fifoFd, buffer.get(), m_streamLocalStoreChunkSize * sizeof(SampleFrame));
                         if (written < 0) {
                             throw std::runtime_error(std::string("Error writing to file: (") + ss.str() + ") - " + strerror(errno));
                         }
-
-                        if (ledToggle) {
-                            ledToggle = false;
-                            chunkLed->off();
-                        } else {
-                            ledToggle = true;
-                            chunkLed->on();
-                        }
-
-                        totalBytes += written;
-                        std::cout << totalBytes << " Bytes ("  << (static_cast<float>(totalBytes) / (1024.0*1024.0))
-                                  <<  " MB) written to chunks in " << m_LocalStoreOutDir << std::endl;
+                        state.totalBytes += written;
 
                         if (static_cast<unsigned long>(written) < m_streamLocalStoreChunkSize) {
-                            std::cout << "Less written than expected: " << written << " instead of " << m_streamLocalStoreChunkSize << std::endl;
+                            std::cerr << "Less written than expected: " << written << " instead of " << m_streamLocalStoreChunkSize << std::endl;
                         }
+
+                        if (m_localStoreChangedCB)
+                            m_localStoreChangedCB(state);
+
                     } catch (std::exception &e) {
                         std::cerr << e.what() << std::endl;
                         continue;
                     }
+                } else {
+                    if (lastWriteRawPcmState)
+                      lastWriteRawPcmState = false;
                 }
             }
         }));

@@ -49,15 +49,28 @@ private:
 class AudioStreamManager {
 
 public:
-    enum DetectorState {
+    enum SignalState {
         STATE_SILENT,
         STATE_SIGNAL
     };
 
-    using Callback = std::function<void(DetectorState s)>;
+    struct LocalStoreState {
+        long totalBytes;
+        long totalChunks;
+        std::string sessionID;
+    };
+
+    struct DetectorState {
+        double rmsPercent;
+        SignalState state;
+    };
+
+    using CallbackDetector = std::function<void(DetectorState s)>;
+    using CallbackLocalStore = std::function<void(LocalStoreState s)>;
 
     AudioStreamManager(const po::variables_map &vmCombined,
-                       Callback onDetectorStateChangedCB);
+                       CallbackDetector onDetectorStateChangedCB,
+                       CallbackLocalStore onLocalStoreChangedCB);
 
     ~AudioStreamManager();
 
@@ -88,7 +101,8 @@ private:
     std::string m_streamPcmOutPrefix;
     unsigned long m_streamLocalStoreChunkSize;
 
-    Callback m_detectorStateChangedCB;
+    CallbackDetector m_detectorStateChangedCB;
+    CallbackLocalStore m_localStoreChangedCB;
 
     size_t fifoSize(int fd);
     int fifoBytesAvailable(int fd);
