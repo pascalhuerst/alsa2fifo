@@ -122,51 +122,20 @@ int main(int argc, char **argv)
 */
 
         auto signalLed = Led::create("raumfeld:1");
+        signalLed->off();
 
         AudioStreamManager streamManager(vmCombined, [&](AudioStreamManager::DetectorState s) {
 
             if (s == AudioStreamManager::STATE_SIGNAL) {
-                std::cout << "Signal detected!" << std::endl;
                 signalLed->on();
             } else {
-                std::cout << "Silence detected!" << std::endl;
                 signalLed->off();
             }
         });
 
-        int c =0;
-        bool isRunning = false;
-
-        std::cout << "To start the shit, press t: " << std::endl;
-        while((c = getchar()) != 'q') {
-
-            std::cout << "key=" << c << std::endl;
-
-            if (c == 't') {
-                if (!isRunning) {
-                    std::cout << "STARTING" << c << std::endl;
-                    streamManager.start();
-                    isRunning = true;
-                } else {
-                    std::cout << "STOPPING" << c << std::endl;
-                    streamManager.stop();
-                    isRunning = false;
-                }
-                std::cout << "StreamManager is currently " << (isRunning ? "running" : "not running") << " toggle!" << std::endl;
-
-            } else {
-                std::cout << "Nice key: " << static_cast<char>(c) << std::endl;
-            }
-
-#if 0
-            // Toggle Led for fun
-            ledOn = !ledOn;
-            if (ledOn)
-                led->on();
-            else
-                led->off();
-#endif
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        streamManager.start();
+        while(getchar() != 'q') {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
         streamManager.stop();
 

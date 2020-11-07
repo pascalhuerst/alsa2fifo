@@ -156,7 +156,7 @@ void AudioStreamManager::start()
         // Instatiation and lambda callback from alsa. Just fill out ringbuffers
         m_alsaAudioInput.reset(new AlsaAudioInput(m_vmCombined, [&] (SampleFrame *frames, size_t numFrames) {
                                    for (size_t i=0; i<numFrames; ++i) {
-                                       m_streamBuffer->enqueue(frames[i]);
+                                       //m_streamBuffer->enqueue(frames[i]);
                                        m_detectorBuffer->enqueue(frames[i]);
                                        m_localStoreBuffer->enqueue(frames[i]);
                                    }
@@ -374,17 +374,17 @@ void AudioStreamManager::stop()
 
         m_terminateRequest.store(true);
 
-        if (m_streamWorker->joinable()) {
+        if (m_streamWorker && m_streamWorker->joinable()) {
             m_streamWorker->join();
             m_streamWorker.reset();
         }
 
-        if (m_detectorWorker->joinable()) {
+        if (m_detectorWorker && m_detectorWorker->joinable()) {
             m_detectorWorker->join();
             m_detectorWorker.reset();
         }
 
-        if (m_localStoreWorker->joinable()) {
+        if (m_localStoreWorker && m_localStoreWorker->joinable()) {
             m_localStoreWorker->join();
             m_localStoreWorker.reset();
         }
