@@ -42,6 +42,8 @@ namespace po = boost::program_options;
 #include "InputKey.h"
 #include "Led.h"
 
+#include "ServiceTracker.h"
+
 void usage [[noreturn]] (const po::options_description &od)
 {
     std::cout << od << std::endl;
@@ -75,9 +77,9 @@ int main(int argc, char **argv)
         odStreamManager.add_options()
                 (strOptStreamManagerFifo.c_str(), po::value<std::string>()->default_value("/tmp/stream_pipe"), "Named pipe to write raw samples to")
                 (strOptStreamManagerStreamBufferSize.c_str(), po::value<unsigned int>()->default_value(4096), "Ring buffer size in frames for pipe stream")
-                (strOptStreamManagerLocalStoreOutputDir.c_str(), po::value<std::string>(), "Directory to store raw pcm data chunks to")
-                (strOptStreamManagerPcmOutChunkSize.c_str(), po::value<unsigned long>(), "Chunk size for raw pcm files")
-                (strOptStreamManagerLocalStorePrefix.c_str(), po::value<std::string>(), "Prefix for raw pcm files");
+                (strOptStreamManagerStorageOutputDir.c_str(), po::value<std::string>(), "Directory to store raw pcm data chunks to")
+                (strOptStreamManagerPcmOutChunkSize.c_str(), po::value<unsigned long>()->default_value(1024*64), "Chunk size for raw pcm files")
+                (strOptStreamManagerStoragePrefix.c_str(), po::value<std::string>(), "Prefix for raw pcm files");
 
         // ########## Detector Options ##########
         po::options_description odDetector("Detector");
@@ -145,12 +147,12 @@ int main(int argc, char **argv)
                 }
             },
 
-            [&](AudioStreamManager::LocalStoreState s){
+            [&](AudioStreamManager::StorageState s){
 
                 static bool toggle = false;
                 toggle = !toggle;
 
-                std::cout << "localStore: totalBytes=" << s.totalBytes << std::endl
+                std::cout << "storage: totalBytes=" << s.totalBytes << std::endl
                           << "            totalChunks=" << s.totalChunks << std::endl
                           << "            sessionCount=" << s.sessionID << std::endl;
 

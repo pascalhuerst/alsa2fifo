@@ -54,7 +54,7 @@ public:
         STATE_SIGNAL
     };
 
-    struct LocalStoreState {
+    struct StorageState {
         long totalBytes;
         long totalChunks;
         std::string sessionID;
@@ -66,11 +66,11 @@ public:
     };
 
     using CallbackDetector = std::function<void(DetectorState s)>;
-    using CallbackLocalStore = std::function<void(LocalStoreState s)>;
+    using CallbackStorage = std::function<void(StorageState s)>;
 
     AudioStreamManager(const po::variables_map &vmCombined,
                        CallbackDetector onDetectorStateChangedCB,
-                       CallbackLocalStore onLocalStoreChangedCB);
+                       CallbackStorage onStorageChangedCB);
 
     ~AudioStreamManager();
 
@@ -85,24 +85,24 @@ private:
 
     std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_streamBuffer;
     std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_detectorBuffer;
-    std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_localStoreBuffer;
+    std::unique_ptr<BlockingReaderWriterQueue<SampleFrame>> m_storageBuffer;
 
     std::unique_ptr<AlsaAudioInput> m_alsaAudioInput;
     std::unique_ptr<std::thread> m_streamWorker;
     std::unique_ptr<std::thread> m_detectorWorker;
-    std::unique_ptr<std::thread> m_localStoreWorker;
+    std::unique_ptr<std::thread> m_storageWorker;
 
     size_t m_detectorBufferSize;
     unsigned int m_detectorSuccession;
     double m_detectorThreshold;
 
     std::string m_streamFifo;
-    std::string m_LocalStoreOutDir;
+    std::string m_storageOutDir;
     std::string m_streamPcmOutPrefix;
-    unsigned long m_streamLocalStoreChunkSize;
+    unsigned long m_streamStorageChunkSize;
 
     CallbackDetector m_detectorStateChangedCB;
-    CallbackLocalStore m_localStoreChangedCB;
+    CallbackStorage m_storageChangedCB;
 
     size_t fifoSize(int fd);
     int fifoBytesAvailable(int fd);

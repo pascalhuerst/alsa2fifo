@@ -18,6 +18,9 @@
 #include "AudioStreamManager.h"
 #include "params.h"
 #include "types.h"
+#include "ServiceTracker.h"
+#include "httplib.h"
+
 
 #include <sys/ioctl.h>
 #include <signal.h>
@@ -32,32 +35,61 @@
 
 AudioStreamManager::AudioStreamManager(const po::variables_map &vmCombined,
                                        CallbackDetector onDetectorStateChangedCB,
-                                       CallbackLocalStore onLocalStoreChangedCB) :
+                                       CallbackStorage onStorageChangedCB) :
     m_terminateRequest(true),
     m_writeRawPcm(false),
     m_vmCombined(vmCombined),
     m_streamBuffer(nullptr),
     m_detectorBuffer(nullptr),
-    m_localStoreBuffer(nullptr),
+    m_storageBuffer(nullptr),
     m_alsaAudioInput(nullptr),
     m_streamWorker(nullptr),
     m_detectorWorker(nullptr),
-    m_localStoreWorker(nullptr),
+    m_storageWorker(nullptr),
     m_detectorBufferSize(0),
     m_detectorSuccession(0),
     m_detectorThreshold(0.0),
     m_streamFifo(""),
-    m_LocalStoreOutDir(""),
+    m_storageOutDir(""),
     m_streamPcmOutPrefix(""),
-    m_streamLocalStoreChunkSize(0),
+    m_streamStorageChunkSize(0),
     m_detectorStateChangedCB(onDetectorStateChangedCB),
-    m_localStoreChangedCB(onLocalStoreChangedCB)
+    m_storageChangedCB(onStorageChangedCB)
 {
 }
 
 AudioStreamManager::~AudioStreamManager()
 {
 }
+
+
+bool sendBuffer(const std::string &url, const std::string &filename, SampleFrame *frames, size_t numFrames) {
+
+    auto buffer = reinterpret_cast<const char*>(frames);
+    size_t byteSize = (sizeof(SampleFrame) * numFrames); 
+
+    std::string stringBuffer;
+    for (int i=0; i<byteSize; i++) {
+        stringBuffer += buffer[i];
+    }    
+
+    httplib::MultipartFormDataItems items = {
+        {"raw_audio", stringBuffer, filename, "application/octet-stream" },
+    };
+
+    httplib::Client cli(url.c_str());
+    auto res = cli.Post("/upload", items);
+
+    if (res.error() != httplib::Error::Success || res->status != 200) {
+        return false;
+    }
+
+    std::cout << "Successfully sent buffer: " <<  url << std::endl;
+
+    return true;
+}
+
+
 
 void AudioStreamManager::start()
 {
@@ -80,25 +112,25 @@ void AudioStreamManager::start()
             throw std::invalid_argument(strOptStreamManagerFifo + " must be set!");
         }
 
-        if (m_vmCombined.count(strOptStreamManagerLocalStoreOutputDir)) {
-            m_LocalStoreOutDir = m_vmCombined[strOptStreamManagerLocalStoreOutputDir].as<std::string>();
+        if (m_vmCombined.count(strOptStreamManagerStorageOutputDir)) {
+            m_storageOutDir = m_vmCombined[strOptStreamManagerStorageOutputDir].as<std::string>();
         } else {
-            throw std::invalid_argument(strOptStreamManagerLocalStoreOutputDir + " must be set!");
+            throw std::invalid_argument(strOptStreamManagerStorageOutputDir + " must be set!");
         }
 
-        if (m_vmCombined.count(strOptStreamManagerLocalStorePrefix)) {
-            m_streamPcmOutPrefix = m_vmCombined[strOptStreamManagerLocalStorePrefix].as<std::string>();
+        if (m_vmCombined.count(strOptStreamManagerStoragePrefix)) {
+            m_streamPcmOutPrefix = m_vmCombined[strOptStreamManagerStoragePrefix].as<std::string>();
         } else {
-            throw std::invalid_argument(strOptStreamManagerLocalStorePrefix + " must be set!");
+            throw std::invalid_argument(strOptStreamManagerStoragePrefix + " must be set!");
         }
 
         if (m_vmCombined.count(strOptStreamManagerPcmOutChunkSize)) {
-            m_streamLocalStoreChunkSize = m_vmCombined[strOptStreamManagerPcmOutChunkSize].as<unsigned long>();
+            m_streamStorageChunkSize = m_vmCombined[strOptStreamManagerPcmOutChunkSize].as<unsigned long>();
         } else {
             throw std::invalid_argument(strOptStreamManagerPcmOutChunkSize + " must be set!");
         }
 
-        m_localStoreBuffer.reset(new BlockingReaderWriterQueue<SampleFrame>(m_streamLocalStoreChunkSize));
+        m_storageBuffer.reset(new BlockingReaderWriterQueue<SampleFrame>(m_streamStorageChunkSize));
 
         unsigned int streamBufferSize = 0;
         if (m_vmCombined.count(strOptStreamManagerStreamBufferSize)) {
@@ -144,9 +176,9 @@ void AudioStreamManager::start()
         // Instatiation and lambda callback from alsa. Just fill out ringbuffers
         m_alsaAudioInput.reset(new AlsaAudioInput(m_vmCombined, [&] (SampleFrame *frames, size_t numFrames) {
                                    for (size_t i=0; i<numFrames; ++i) {
-                                       //m_streamBuffer->enqueue(frames[i]);
+                                       m_streamBuffer->enqueue(frames[i]);
                                        m_detectorBuffer->enqueue(frames[i]);
-                                       m_localStoreBuffer->enqueue(frames[i]);
+                                       m_storageBuffer->enqueue(frames[i]);
                                    }
                                }));
 #if 0
@@ -286,17 +318,19 @@ void AudioStreamManager::start()
             }
         }));
 
-        // LocalStore lambda in a thread
-        m_localStoreWorker.reset(new std::thread([&] {
-            std::unique_ptr<SampleFrame[]> buffer(new SampleFrame[m_streamLocalStoreChunkSize]);
+        // Storage lambda in a thread
+        m_storageWorker.reset(new std::thread([&] {
+            std::unique_ptr<SampleFrame[]> buffer(new SampleFrame[m_streamStorageChunkSize]);
 
-            AudioStreamManager::LocalStoreState state = {0};
+            AudioStreamManager::StorageState state = {0};
             bool lastWriteRawPcmState = false;
+
+            auto st = new ServiceTracker("_observer-chunksink._tcp");
 
             while (!m_terminateRequest) {
                 size_t i=0;
-                while (i<m_streamLocalStoreChunkSize && !m_terminateRequest) {
-                    auto ret = m_localStoreBuffer->wait_dequeue_timed(buffer[i], std::chrono::milliseconds(500));            
+                while (i<m_streamStorageChunkSize && !m_terminateRequest) {
+                    auto ret = m_storageBuffer->wait_dequeue_timed(buffer[i], std::chrono::milliseconds(500));            
                     if (m_terminateRequest) return;
                     if (!ret)
                         continue;
@@ -321,27 +355,42 @@ void AudioStreamManager::start()
                         state.sessionID = strTimestamp;
                     }
           
-                    std::string path = m_LocalStoreOutDir + "/" + m_streamPcmOutPrefix + "_" + state.sessionID + "_" + std::string(strChunkCount) + "_" + strTimestamp + ".raw";
+                    std::string fileName = m_streamPcmOutPrefix + "_" + state.sessionID + "_" + std::string(strChunkCount) + "_" + strTimestamp + ".raw";
+                    auto services = st->GetServiceMap();
+                    for (const auto service : services) {
+                        for (const auto se : service.second) {
+                            std::string url = se.second.address + ":" + std::to_string(se.second.port);
+                            std::cout << "Try url: " << url << std::endl;
+                            if (sendBuffer(url, fileName, buffer.get(), m_streamStorageChunkSize))
+                                break;
+                        }
+                    }
 
+                    // Filesystem (rework!)
+                    // ##########
+                    # if 0
                     try {
+                        std::string path = m_storageOutDir + "/" + fileName;
                         File fifoFd(path, O_WRONLY | O_CREAT, 0666);
-                        ssize_t written = ::write(fifoFd, buffer.get(), m_streamLocalStoreChunkSize * sizeof(SampleFrame));
+                        ssize_t written = ::write(fifoFd, buffer.get(), m_streamStorageChunkSize * sizeof(SampleFrame));
                         if (written < 0) {
                             throw std::runtime_error(std::string("Error writing to file: (") + ss.str() + ") - " + strerror(errno));
                         }
                         state.totalBytes += written;
 
-                        if (static_cast<unsigned long>(written) < m_streamLocalStoreChunkSize) {
-                            std::cerr << "Less written than expected: " << written << " instead of " << m_streamLocalStoreChunkSize << std::endl;
+                        if (static_cast<unsigned long>(written) < m_streamStorageChunkSize) {
+                            std::cerr << "Less written than expected: " << written << " instead of " << m_streamStorageChunkSize << std::endl;
                         }
 
-                        if (m_localStoreChangedCB)
-                            m_localStoreChangedCB(state);
+                        if (m_storageChangedCB)
+                            m_storageChangedCB(state);
 
                     } catch (std::exception &e) {
                         std::cerr << e.what() << std::endl;
                         continue;
                     }
+                    #endif
+
                 } else {
                     if (lastWriteRawPcmState)
                       lastWriteRawPcmState = false;
@@ -350,6 +399,9 @@ void AudioStreamManager::start()
         }));
     }
 }
+
+
+
 
 void AudioStreamManager::stop()
 {
@@ -367,15 +419,15 @@ void AudioStreamManager::stop()
             m_detectorWorker.reset();
         }
 
-        if (m_localStoreWorker && m_localStoreWorker->joinable()) {
-            m_localStoreWorker->join();
-            m_localStoreWorker.reset();
+        if (m_storageWorker && m_storageWorker->joinable()) {
+            m_storageWorker->join();
+            m_storageWorker.reset();
         }
 
         m_alsaAudioInput.reset();
         m_streamBuffer.reset();
         m_detectorBuffer.reset();
-        m_localStoreBuffer.reset();
+        m_storageBuffer.reset();
     }
 }
 
