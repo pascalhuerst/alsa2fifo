@@ -59,10 +59,8 @@ int main(int argc, char **argv)
         // ########## General Options ##########
         po::options_description odGeneric("Generic");
         odGeneric.add_options()
-                (strOptGenericHelp.c_str(), "Print help message")
-                (strOptGenericDaemon.c_str(), "Daemonize after startup")
-                (strOptGenericKillDaemon.c_str(), "Kill a running daemon");
-
+                (strOptGenericHelp.c_str(), "Print help message");
+                
         // ########## Audio Options ##########
         po::options_description odAudio("Audio");
         odAudio.add_options()
@@ -93,7 +91,6 @@ int main(int argc, char **argv)
         odLed.add_options()
                 (strOptLedDetector.c_str(), po::value<std::string>(), "Use this led for detector state")
                 (strOptLedIndexer.c_str(), po::value<std::string>(), "Use this led for indexer state");
-
 
         // ########## Combined ##########
         odCombined.add(odGeneric).add(odAudio).add(odStreamManager).add(odDetector).add(odLed);
@@ -162,6 +159,18 @@ int main(int argc, char **argv)
                     } else {
                         indexerLed->off();
                     }
+                }
+            }
+        );
+
+        InputKey keys(0);
+        keys.registerKey(59, 
+            [](){},
+            [&](std::chrono::milliseconds pressTime) {
+                if (pressTime.count() >= 300) {
+                    std::cout << "Requesting new session t=" << pressTime.count() << "ms" << std::endl;
+
+                    streamManager.cutSession();
                 }
             }
         );

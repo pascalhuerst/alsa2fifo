@@ -24,7 +24,7 @@
 #include <poll.h>
 #include <unistd.h>
 
-InputKey::InputKey(const po::variables_map &vmGpioKey, int inputNr) :
+InputKey::InputKey(int inputNr) :
     m_pressValue(1),
     m_releaseValue(0),
     m_mutex(),
@@ -32,7 +32,6 @@ InputKey::InputKey(const po::variables_map &vmGpioKey, int inputNr) :
     m_isRunning(false),
     m_terminateRequest(false)
 {
-    (void)vmGpioKey;
     start(inputNr);
 }
 

@@ -76,10 +76,12 @@ public:
 
     void start();
     void stop();
+    void cutSession();
 
 private:
     std::atomic<bool> m_terminateRequest;
     std::atomic<bool> m_writeRawPcm;
+    std::atomic<bool> m_requestNewSession;
 
     po::variables_map m_vmCombined;
 

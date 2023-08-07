@@ -37,7 +37,8 @@ AudioStreamManager::AudioStreamManager(const po::variables_map &vmCombined,
                                        CallbackDetector onDetectorStateChangedCB,
                                        CallbackStorage onStorageChangedCB) :
     m_terminateRequest(true),
-    m_writeRawPcm(false),
+    m_writeRawPcm(true),
+    m_requestNewSession(false),
     m_vmCombined(vmCombined),
     m_streamBuffer(nullptr),
     m_detectorBuffer(nullptr),
@@ -69,7 +70,7 @@ bool sendBuffer(const std::string &url, const std::string &filename, SampleFrame
     size_t byteSize = (sizeof(SampleFrame) * numFrames); 
 
     std::string stringBuffer;
-    for (int i=0; i<byteSize; i++) {
+    for (size_t i=0; i<byteSize; i++) {
         stringBuffer += buffer[i];
     }    
 
@@ -111,7 +112,7 @@ void AudioStreamManager::start()
         } else {
             throw std::invalid_argument(strOptStreamManagerFifo + " must be set!");
         }
-
+        
         if (m_vmCombined.count(strOptStreamManagerStorageOutputDir)) {
             m_storageOutDir = m_vmCombined[strOptStreamManagerStorageOutputDir].as<std::string>();
         } else {
@@ -123,7 +124,7 @@ void AudioStreamManager::start()
         } else {
             throw std::invalid_argument(strOptStreamManagerStoragePrefix + " must be set!");
         }
-
+        
         if (m_vmCombined.count(strOptStreamManagerPcmOutChunkSize)) {
             m_streamStorageChunkSize = m_vmCombined[strOptStreamManagerPcmOutChunkSize].as<unsigned long>();
         } else {
@@ -176,101 +177,20 @@ void AudioStreamManager::start()
         // Instatiation and lambda callback from alsa. Just fill out ringbuffers
         m_alsaAudioInput.reset(new AlsaAudioInput(m_vmCombined, [&] (SampleFrame *frames, size_t numFrames) {
                                    for (size_t i=0; i<numFrames; ++i) {
-                                       m_streamBuffer->enqueue(frames[i]);
+                                       //m_streamBuffer->enqueue(frames[i]);
                                        m_detectorBuffer->enqueue(frames[i]);
-                                       m_storageBuffer->enqueue(frames[i]);
+                                       if (m_writeRawPcm) {
+                                            m_storageBuffer->enqueue(frames[i]);
+                                       }
                                    }
                                }));
-#if 0
-        // Stream lamda in a thread
-        m_streamWorker.reset(new std::thread([&] {
-            // Ignore SIGPIPE. Otherwise we terminate if reader disappears. Instead, we want start from the beginning
-            ::signal(SIGPIPE, SIG_IGN);
 
-            const size_t chunkSize = 1024;
-            SampleFrame buffer[chunkSize];
-
-            int counter = 0;
-            while (!fifoHasReader(m_streamFifo) && !m_terminateRequest) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                if ((++counter) % 10 == 0) {
-                    std::cout << "Pipe has no reader. (" << (counter>>1) << "s)" << std::endl;
-                }
-            }
-
-            if (!m_terminateRequest) {
-                // Now we had a reader. Open blocking.
-                File fifoFd(m_streamFifo, O_WRONLY);
-
-                while (!m_terminateRequest) {
-
-                    size_t i=0;
-                    while (i<chunkSize && !m_terminateRequest) {
-                        if(!m_streamBuffer->wait_dequeue_timed(buffer[i++], std::chrono::milliseconds(500)))
-                            continue;
-                    }
-
-                    if (m_terminateRequest)
-                        continue;
-
-                    size_t byteSize = chunkSize * sizeof(SampleFrame);
-                    size_t bytesWritten = 0;
-
-                    uint8_t *byteBuffer = reinterpret_cast<uint8_t*>(buffer);
-
-                    while (bytesWritten < byteSize && !m_terminateRequest) {
-                        try {
-                            struct pollfd pfd = {0, 0, 0};
-                            pfd.fd = fifoFd;
-                            pfd.events = POLLOUT;
-
-                            int ret = poll(&pfd, 1, 500);
-
-                            if (ret == 0) { //Timeout
-                                int availableBytes = fifoBytesAvailable(fifoFd);
-                                size_t size = fifoSize(fifoFd);
-
-                                std::cout << "Writing to Fifo timed out:\n";
-                                std::cout << "available:  " << availableBytes << "\n";
-                                std::cout << "size:       " << size << "\n";
-                                std::cout << "Level:      " << (static_cast<float>(availableBytes) / static_cast<float>(availableBytes)) << "\n";
-
-                                continue;
-
-                            } else if (ret < 0) {
-                                throw std::runtime_error(std::string("Error in poll(): ") + strerror(errno));
-
-                            } // ret>0 -> Some data can be written
-
-                            ssize_t written = 0;
-                            while ((written = ::write(fifoFd, &byteBuffer[bytesWritten], byteSize - bytesWritten)) < 0 && errno == EPIPE && !m_terminateRequest) {
-                                std::cout << "Fifo lost reader! write throws SIGPIPE. Waiting 500ms." << std::endl;
-                                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                            }
-
-                            if (m_terminateRequest)
-                                continue;
-
-                            if (written < 0)
-                                throw std::runtime_error(std::string("Error writing to fifo: (") + m_streamFifo + ") - " + strerror(errno));
-
-                            bytesWritten += static_cast<size_t>(written);
-                        
-                        } catch (std::exception &e) {
-                            std::cerr << e.what() << std::endl;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }));
-#endif
         // Detector lambda in a thread
         m_detectorWorker.reset(new std::thread([&] {
 
             SampleFrame buffer[m_detectorBufferSize];
-            DetectorState currentState = {0.0, STATE_SILENT};
-            unsigned int rmsCounter = 0;
+            DetectorState currentState = {0.0, STATE_SIGNAL};
+            unsigned int rmsCounter = 1;
 
             while (!m_terminateRequest) {
 
@@ -355,16 +275,24 @@ void AudioStreamManager::start()
                         state.sessionID = strTimestamp;
                     }
           
+                    if (m_requestNewSession) {
+                        state.sessionID = strTimestamp;
+                        state.totalChunks = 0;
+                        m_requestNewSession = false;
+                    }
+
                     std::string fileName = m_streamPcmOutPrefix + "_" + state.sessionID + "_" + std::string(strChunkCount) + "_" + strTimestamp + ".raw";
                     auto services = st->GetServiceMap();
-                    for (const auto service : services) {
-                        for (const auto se : service.second) {
+                    for (const auto &service : services) {
+                        for (const auto &se : service.second) {
                             std::string url = se.second.address + ":" + std::to_string(se.second.port);
                             std::cout << "Try url: " << url << std::endl;
                             if (sendBuffer(url, fileName, buffer.get(), m_streamStorageChunkSize))
                                 break;
                         }
                     }
+
+                    //sendBuffer("http://127.0.0.1:8080", fileName, buffer.get(), m_streamStorageChunkSize);
 
                     // Filesystem (rework!)
                     // ##########
@@ -400,9 +328,6 @@ void AudioStreamManager::start()
     }
 }
 
-
-
-
 void AudioStreamManager::stop()
 {
     if (!m_terminateRequest) {
@@ -429,6 +354,11 @@ void AudioStreamManager::stop()
         m_detectorBuffer.reset();
         m_storageBuffer.reset();
     }
+}
+
+void AudioStreamManager::cutSession()
+{
+    m_requestNewSession = true;
 }
 
 size_t AudioStreamManager::fifoSize(int fd)

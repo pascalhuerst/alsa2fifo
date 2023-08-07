@@ -33,7 +33,7 @@ class InputKey {
 
 public:
     using PressCallback = std::function<void(void)>;
-    using ReleaseCallback = std::function<void(std::chrono::milliseconds preeTime)>;
+    using ReleaseCallback = std::function<void(std::chrono::milliseconds pressTime)>;
 
     struct Event {
         PressCallback pc;
@@ -42,7 +42,7 @@ public:
     };
 
 
-    InputKey(const po::variables_map &vmGpioKey, int inputNr);
+    InputKey(int inputNr);
     ~InputKey();
 
     void registerKey(int keyCode, PressCallback pc, ReleaseCallback rc);
